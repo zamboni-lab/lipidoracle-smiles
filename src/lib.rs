@@ -24,18 +24,21 @@
 //! ```
 //!
 //! [`smiles2name`] accepts equivalent atom and branch orders by canonicalizing
-//! before recognition. [`expand_cxsmiles_for_depiction`] turns variable `Sg:`
-//! regions into one concrete plain-SMILES representative.
+//! before recognition. [`smiles_for_depiction`] makes `m:` position variation
+//! deterministic for drawing, while [`smiles_expand`] turns
+//! variable `Sg:` regions into one concrete plain-SMILES representative.
 //!
 //! [CXSMILES]: https://docs.chemaxon.com/latest/formats_chemaxon-extended-smiles-and-smarts-cxsmiles-and-cxsmarts.html
 
 mod cxsmiles;
+mod depiction;
 mod forward;
 mod nomenclature;
 mod reverse;
 
 pub use cxsmiles::canonicalize_cxsmiles;
-pub use forward::{expand_cxsmiles_for_depiction, ChainAtoms, LipidStructure};
+pub use depiction::smiles_for_depiction;
+pub use forward::{smiles_expand, ChainAtoms, LipidStructure};
 
 /// Converts a Shorthand2020 lipid name into SMILES, or CXSMILES when
 /// something about the structure was not determined.

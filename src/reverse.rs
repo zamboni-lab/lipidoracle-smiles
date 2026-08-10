@@ -43,7 +43,7 @@ struct Cx<'a> {
     /// arbitrary choice — i.e. whether the name joined its chains with `_`.
     swappable: bool,
     /// `(term count, sum)` per `constrain(...)` token, in order. They pair
-    /// with `sg` positionally — see `expand_cxsmiles_for_depiction`.
+    /// with `sg` positionally — see `smiles_expand`.
     equations: Vec<(usize, usize)>,
 }
 

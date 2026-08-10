@@ -15,7 +15,8 @@ use chematic_smiles::{canonical_atom_order, canonical_smiles, parse};
 /// * the positional `$...$` atom-label array used by `swappable(...)`;
 /// * `atomProp:` atom indices.
 ///
-/// Lipid trailer tokens after the closing pipe, such as `constrain(...)` and
+/// Candidate indexes in each `m:` block are emitted in ascending canonical
+/// atom order. Lipid trailer tokens after the closing pipe, such as `constrain(...)` and
 /// `swappable(...)`, refer to names rather than atom positions and are retained
 /// verbatim. Unknown CX fields are retained verbatim as well.
 ///
@@ -262,10 +263,15 @@ fn rewrite_field(field: &str, old_to_new: &[usize]) -> Option<String> {
     if let Some(rest) = field.strip_prefix("m:") {
         let (floating, candidates) = rest.split_once(':')?;
         let floating = remap_index(floating, old_to_new)?;
-        let candidates = candidates
+        let mut candidates = candidates
             .split('.')
-            .map(|atom| remap_index(atom, old_to_new).map(|i| i.to_string()))
+            .map(|atom| remap_index(atom, old_to_new))
             .collect::<Option<Vec<_>>>()?;
+        candidates.sort_unstable();
+        let candidates = candidates
+            .into_iter()
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>();
         return Some(format!("m:{floating}:{}", candidates.join(".")));
     }
     if let Some(rest) = field.strip_prefix("atomProp:") {
@@ -348,10 +354,24 @@ mod tests {
         let (floating, candidates) = rest.split_once(':').unwrap();
         let atom_count = parse(parsed.base).unwrap().atom_count();
         assert!(floating.parse::<usize>().unwrap() < atom_count);
-        assert!(candidates
+        let candidates = candidates
             .split('.')
-            .all(|i| i.parse::<usize>().unwrap() < atom_count));
+            .map(|i| i.parse::<usize>().unwrap())
+            .collect::<Vec<_>>();
+        assert!(candidates.iter().all(|&i| i < atom_count));
         assert_eq!(canonicalize_cxsmiles(&out).as_deref(), Some(out.as_str()));
+    }
+
+    #[test]
+    fn sorts_m_candidates_after_canonicalizing_a_cyclized_chain() {
+        let generated = crate::name2smiles("FA 20:2(5,8);[11-15cy5;13OH];OH").unwrap();
+        let canonical = canonicalize_cxsmiles(&generated).unwrap();
+        let fields = split_cxsmiles(&canonical).unwrap().fields.unwrap();
+        let m = split_cx_fields(fields)
+            .into_iter()
+            .find(|field| field.starts_with("m:"))
+            .unwrap();
+        assert_eq!(m, "m:1:2.3.4.5.6.7.8.9.10.11.12.13.14.15.16.17.21.22.23");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use lipid_notation::{
-    canonicalize_cxsmiles, expand_cxsmiles_for_depiction, name2smiles, name2structure, smiles2name,
+    canonicalize_cxsmiles, name2smiles, name2structure, smiles2name, smiles_expand,
 };
 
 fn testdata(file: &str) -> PathBuf {
@@ -125,7 +125,7 @@ fn golden_strings_still_match() {
         );
         // Expansion and `name2structure` build the same connected molecule.
         assert_eq!(
-            expand_cxsmiles_for_depiction(cxsmiles),
+            smiles_expand(cxsmiles),
             *expanded,
             "{name}: expansion should agree with name2structure"
         );

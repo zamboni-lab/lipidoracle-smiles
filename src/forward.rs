@@ -193,7 +193,7 @@ pub(crate) fn generate_smiles(name: &str) -> Option<String> {
 /// * `_`-joined names use one representative chain assignment and set
 ///   [`LipidStructure::regio_resolved`] to `false`;
 /// * The `Sg:` unlocalized-double-bond markers are already expanded (see
-///   [`expand_cxsmiles_for_depiction`]), and the atom indices account for
+///   [`smiles_expand`]), and the atom indices account for
 ///   the padding atoms that expansion inserts.
 ///
 /// Atom indices are 0-based in SMILES emission order, which is the order
@@ -406,7 +406,7 @@ struct CxFragment {
     /// Local atom index of each chain carbon actually emitted, in C1..Cn
     /// order. Shorter than the chain's carbon count when `Sg:` markers
     /// stand in for a variable-length run — the atoms that
-    /// `expand_cxsmiles_for_depiction` inserts fill the rest of the run in
+    /// `smiles_expand` inserts fill the rest of the run in
     /// place, so `generate_structure` splices them back in after
     /// expansion. Empty for non-chain fragments (bare `O` slots).
     carbon_atoms: Vec<usize>,
@@ -458,7 +458,7 @@ fn build_chain_fragment(chain: &ParsedChain) -> Option<CxFragment> {
 /// spanning everything after the last known feature, plus a size
 /// constraint, rather than a guessed literal position: each Sg-marked
 /// atom is itself the first unit of its own variable's count, so
-/// `expand_cxsmiles_for_depiction` only needs to insert `value - 1` more
+/// `smiles_expand` only needs to insert `value - 1` more
 /// to reach any one valid total length. Modifications with no position
 /// at all (`pos == 0`) become extra dot-joined fragments plus `m:`
 /// blocks, appended after the main chain.
@@ -957,11 +957,11 @@ pub(crate) fn count_atoms(smiles: &str) -> usize {
 ///
 /// Returns the input unchanged if it has no CXSMILES suffix or nothing
 /// to expand.
-pub fn expand_cxsmiles_for_depiction(smi: &str) -> String {
+pub fn smiles_expand(smi: &str) -> String {
     expand_with_padding_inserts(smi).0
 }
 
-/// [`expand_cxsmiles_for_depiction`] plus the index translation it applied,
+/// [`smiles_expand`] plus the index translation it applied,
 /// so callers holding atom indices into the unexpanded string can move them
 /// across: the `(atom index, count)` runs of padding `C` atoms added for the
 /// `Sg:` markers. These are chain carbons themselves, so a caller mapping a
@@ -2095,7 +2095,7 @@ mod tests {
             "should have a 5-variable size constraint"
         );
 
-        let expanded = expand_cxsmiles_for_depiction(&s);
+        let expanded = smiles_expand(&s);
         assert!(!expanded.contains('|'));
         assert_balanced(&expanded);
         assert_eq!(
@@ -2197,7 +2197,7 @@ mod tests {
         for name in ["LPC 18:2", "PC 18:2/14:1", "PE 18:2/14:1", "LPE 18:2"] {
             let s = generate_smiles(name).expect("should resolve");
             assert_balanced(&s);
-            let expanded = expand_cxsmiles_for_depiction(&s);
+            let expanded = smiles_expand(&s);
             assert!(!expanded.contains('|'));
             assert_balanced(&expanded);
             assert!(
@@ -2209,7 +2209,7 @@ mod tests {
         // LPC 18:2: glycerophosphocholine backbone (11 headgroup atoms +
         // 3 glycerol carbons + 1 free OH) + an 18-carbon acyl chain.
         let s = generate_smiles("LPC 18:2").unwrap();
-        let expanded = expand_cxsmiles_for_depiction(&s);
+        let expanded = smiles_expand(&s);
         assert_eq!(
             expanded.chars().filter(|&c| c == 'C').count(),
             3 + 5 + 18,
@@ -2240,7 +2240,7 @@ mod tests {
         let s2 = generate_smiles("CAR 18:1").expect("should resolve");
         assert_balanced(&s2);
         assert!(s2.starts_with("O(C(=O)"));
-        let expanded = expand_cxsmiles_for_depiction(&s2);
+        let expanded = smiles_expand(&s2);
         assert_balanced(&expanded);
         assert!(expanded.starts_with("O(C(=O)"));
         // 18 chain carbons + carnitine's own 7 ([C@H] + CH2-C(=O)O- branch (2) + CH2 + N(CH3)3 (3)).
@@ -2476,7 +2476,7 @@ mod tests {
             "unlocalized double bonds should be flagged with Sg:"
         );
 
-        let expanded = expand_cxsmiles_for_depiction(&s);
+        let expanded = smiles_expand(&s);
         assert!(!expanded.contains('|'));
         assert_balanced(&expanded);
         assert!(
@@ -2644,7 +2644,7 @@ mod tests {
     fn expand_cxsmiles_resolves_to_full_chain_length() {
         // FA 18:2: 18 total carbons, 2 unlocalized double bonds.
         let cxsmiles = generate_smiles("FA 18:2").expect("should resolve");
-        let expanded = expand_cxsmiles_for_depiction(&cxsmiles);
+        let expanded = smiles_expand(&cxsmiles);
 
         assert!(
             !expanded.contains('|'),
@@ -2669,7 +2669,7 @@ mod tests {
     #[test]
     fn expand_cxsmiles_handles_multiple_unlocalized_dbs() {
         let cxsmiles = "CC=CC=CC(=O)O |Sg:n:0:a:ht,Sg:n:2:b:ht,Sg:n:4:c:ht| a+b+c=15";
-        let expanded = expand_cxsmiles_for_depiction(cxsmiles);
+        let expanded = smiles_expand(cxsmiles);
         assert!(!expanded.contains('|'));
         assert_balanced(&expanded);
         assert_eq!(expanded.chars().filter(|&c| c == 'C').count(), 18);
@@ -2679,7 +2679,7 @@ mod tests {
     fn expand_cxsmiles_passthrough_without_sg_blocks() {
         // Plain SMILES with no CXSMILES suffix is returned unchanged.
         let s = generate_smiles("FA 16:0").expect("should resolve");
-        assert_eq!(expand_cxsmiles_for_depiction(&s), s);
+        assert_eq!(smiles_expand(&s), s);
     }
 
     #[test]
@@ -2741,7 +2741,7 @@ mod tests {
             "the terminal carbon reduces the variable count by one"
         );
 
-        let expanded = expand_cxsmiles_for_depiction(&s);
+        let expanded = smiles_expand(&s);
         assert_eq!(expanded.chars().filter(|&c| c == 'C').count(), 18);
         assert_eq!(expanded.matches("C=C").count(), 1);
     }
@@ -2804,12 +2804,12 @@ mod tests {
             ("FA 18:0;oxo", "OC(=O)CCCCCCCCCCCCCCCCC.*=O"),
             ("FA 18:0;COOH", "OC(=O)CCCCCCCCCCCCCCCCC.*C(=O)O"),
         ] {
-            let depicted = expand_cxsmiles_for_depiction(&generate_smiles(name).unwrap());
+            let depicted = smiles_expand(&generate_smiles(name).unwrap());
             assert_eq!(depicted, expected, "{name}");
         }
         // A charged bracket atom inside a real structure is not a
         // position-variation placeholder and must survive untouched.
-        let pc = expand_cxsmiles_for_depiction(&generate_smiles("PC 16:0/18:1(9)").unwrap());
+        let pc = smiles_expand(&generate_smiles("PC 16:0/18:1(9)").unwrap());
         assert!(pc.contains("[O-]") && pc.contains("[N+]"), "{pc}");
 
         // The stub sits between the chain and whatever follows, so every
@@ -2858,7 +2858,7 @@ mod tests {
         // Two chains each with their own unlocalized double bonds, joined
         // with unresolved regiochemistry: exercises CxBuilder's atom
         // offsetting and variable renaming across multiple fragments, and
-        // expand_cxsmiles_for_depiction's positional (not name-based)
+        // smiles_expand's positional (not name-based)
         // matching of Sg positions back to their constraint equation.
         let s = generate_smiles("PC 16:2_18:1").expect("should resolve");
         assert_balanced(&s);
@@ -2869,7 +2869,7 @@ mod tests {
             "chain1 (16:2, 2 unlocalized DBs -> 3 Sg) + chain2 (18:1, 1 unlocalized DB -> 2 Sg)"
         );
 
-        let expanded = expand_cxsmiles_for_depiction(&s);
+        let expanded = smiles_expand(&s);
         assert!(!expanded.contains('|'));
         assert_balanced(&expanded);
         // Backbone (glycerol C1-C3 + phosphocholine's 5 C's) plus every
