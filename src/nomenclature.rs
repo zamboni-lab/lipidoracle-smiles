@@ -1,8 +1,4 @@
-//! The slice of LipidOracle's name handling that the SMILES generator needs.
-//!
-//! Extracted from `src/nomenclature.rs` in the main LipidOracle crate. Only
-//! the input-boundary helpers live here; scoring, ranking and the rest of the
-//! nomenclature machinery stay upstream.
+//! Input-boundary helpers for lipid display names.
 
 /// Splits a display name into its canonical part and its optional bracketed
 /// confidence tail.
@@ -10,10 +6,9 @@
 /// The EAD engines emit idlevel4 names carrying a per-position consensus in
 /// square brackets, e.g.
 /// `"FA 20:4;11OH [DB sn1: Δ5 100%, Δ8 100%; OH sn1: 11 100%]"`. The tail is
-/// information the structure formats cannot represent at all (see
-/// `dev/SMILES.md` §4.4), so the generator strips it and works from the
-/// canonical name.
-pub fn split_display_name(name: &str) -> (String, Option<String>) {
+/// metadata that structure formats cannot represent, so structural conversion
+/// uses only the canonical name.
+pub(crate) fn split_display_name(name: &str) -> (String, Option<String>) {
     let trimmed = name.trim();
     if let Some(start) = trimmed.find(" [") {
         if trimmed.ends_with(']') && start > 0 {

@@ -1,156 +1,152 @@
 # lipid_notation
 
-Convert [Shorthand2020](https://doi.org/10.1194/jlr.S120001025) lipid names to
-SMILES/CXSMILES, encoding **what was and wasn't determined** instead of guessing
-a fully specified structure.
+`lipid_notation` converts [Shorthand2020](https://doi.org/10.1194/jlr.S120001025)
+lipid names to SMILES/CXSMILES and back. It preserves structural uncertainty
+instead of choosing positions or chain assignments that were not measured.
 
-Extracted from [LipidOracle](https://github.com/zamboni-lab/lipidoracle) so it
-can be used, reviewed and cited on its own. No dependencies.
+## Quick start
 
 ```rust
-use lipid_notation::name2smiles;
+use lipid_notation::{canonicalize_cxsmiles, name2smiles, smiles2name};
 
-// Fully determined -> plain, ordinary SMILES.
-name2smiles("FA 18:1(9Z)");   // Some(r"OC(=O)CCCCCCC/C=C\CCCCCCCC")
+// A fully determined structure needs plain SMILES only.
+let determined = name2smiles("FA 18:1(9Z)").unwrap();
+assert_eq!(determined, r"OC(=O)CCCCCCC/C=C\CCCCCCCC");
 
-// Double bond present, position unknown -> a variable-length run plus a size
-// constraint, never a guessed position.
-name2smiles("FA 18:1");       // Some("OC(=O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht| constrain(a+b=15)")
+// Unknown double-bond positions are retained in CXSMILES Sg regions.
+let ambiguous = name2smiles("FA 18:1").unwrap();
+assert!(ambiguous.contains("Sg:"));
 
-// Hydroxyl present, position unknown -> a position-variation bond over every
-// candidate carbon.
-name2smiles("FA 18:0;OH");    // Some("OC(=O)CCCCCCCCCCCCCCCCC.*O |m:20:3.4.…19|")
-
-// sn-position unknown -> linking atoms labelled, assignment left permutable.
-name2smiles("DG 16:0_18:1(9)");
-// Some("C(CO)(OC(=O)CCCCCCCC=CCCCCCCCC)COC(=O)CCCCCCCCCCCCCCC //        |$;;;sn2;;;;;;;;;;;;;;;;;;;;;sn1$| swappable(sn1,sn2)")
-
-// Sum composition only -> nothing, because any single answer would be invented.
-name2smiles("PC 34:1");       // None
+// Reverse conversion accepts equivalent atom and branch orders.
+let canonical = canonicalize_cxsmiles(&ambiguous).unwrap();
+assert_eq!(smiles2name(&canonical).as_deref(), Some("FA 18:1"));
 ```
 
-The presence of a `|...|` tail is itself the signal: **pipes mean something was
-undetermined.**
+Add the crate as a dependency:
 
-## Why this exists
+```toml
+[dependencies]
+lipid_notation = { git = "https://github.com/zamboni-lab/lipidoracle-smiles" }
+```
 
-Lipidomics reports structure at whatever level the evidence supports. `PC 34:1`
-concedes everything but the sum composition; `PC 16:0_18:1` names the chains but
-not their positions; `PC 16:0/18:1(9Z)` concedes nothing. SMILES only speaks the
-last of those, so the usual options are to invent the missing detail or emit
-nothing at all. This crate takes the third option.
+The minimum supported Rust version is 1.85.
 
-| block | says | emitted when |
-|---|---|---|
-| *(none)* | geometry undetermined | always — a bare `C=C` already means "cis or trans, not determined" |
-| `Sg:` | "the double bond is somewhere in this stretch" | a chain declares more double bonds than it localizes |
-| `m:` | "this group attaches somewhere on this chain" | a modification is written with no position (`;OH`) |
-| `$snN$` + `swappable(...)` | "either chain could be at either position" | chains joined with `_` |
+## Public API
 
-`dev/SMILES.md` §3 records what was wrong, why it survived a full test suite,
-and what replaced it. Corrections came from review by John Mayfield.
-
-## API
-
-| function | status |
+| Function | Purpose |
 |---|---|
-| `name2smiles(name) -> Option<String>` | the stored CXSMILES |
-| `name2structure(name) -> Option<LipidStructure>` | plain SMILES + per-chain atom indices, for highlighting |
-| `expand_cxsmiles_for_depiction(smi) -> String` | stored → drawable by any tool |
-| `class_needs_multi_chain(class) -> bool` | whether a class rejects sum-composition shorthand |
-| `smiles2name(smi) -> Option<String>` | the stored string back to a name |
+| `name2smiles(name)` | Convert a lipid name to SMILES or CXSMILES |
+| `smiles2name(smiles)` | Canonicalize and convert a supported structure to a lipid name |
+| `canonicalize_cxsmiles(smiles)` | Canonicalize SMILES and remap every atom-indexed CX field |
+| `name2structure(name)` | Return depiction SMILES plus per-chain atom indexes |
+| `expand_cxsmiles_for_depiction(smiles)` | Expand variable-length regions into one drawable representative |
+| `class_needs_multi_chain(class)` | Report whether sum composition is structurally ambiguous for a class |
 
-`smiles2name` inverts `name2smiles` — it reads this crate's own output, not
-arbitrary third-party SMILES. Every answer is proved before it is returned: the
-name is fed back through `name2smiles` and must regenerate the input exactly, so
-the function can lose coverage but cannot return a name meaning something other
-than the structure given. That is what makes the corpus round-trip test a
-validation of the forward direction rather than a formatting check — see
-`dev/SMILES.md` §4.6.
+All conversion functions return `None` when a structure cannot be represented
+without inventing information. `expand_cxsmiles_for_depiction` returns the input
+unchanged when no expansion is necessary.
 
-## Toolkit support
+## How ambiguity is encoded
 
-Stored strings are rigorous, not universally drawable. **Verified against RDKit
-2024.09.6 and CDK Depict:**
+Plain SMILES is emitted when the name determines one structure. Otherwise the
+output uses a small CXSMILES extension model:
 
-| block | CDK | RDKit |
-|---|---|---|
-| plain `C=C` | ✅ | ✅ |
-| `Sg:` + size constraint | ✅ labelled repeat brackets | ❌ **silently ignored** |
-| `m:` (`*O` dummy-stub form) | ✅ collapses to one position | ✅ highlights all candidates |
-| `$snN$` labels + `swappable(...)` | ✅ atom labels | ✅ labels survive canonicalization |
+| Encoding | Meaning |
+|---|---|
+| bare `C=C` | Double-bond geometry is unspecified |
+| `Sg:` plus `constrain(...)` | A double bond is present in an unlocalized chain region |
+| `m:` | A modification is attached to one of several candidate atoms |
+| `$snN$` labels plus `swappable(...)` | Explicit chains have unresolved sn assignment |
 
-The RDKit `Sg:` row is the dangerous one — no warning, no error, just a molecule
-missing most of its chain. **Call `expand_cxsmiles_for_depiction` before handing
-a stored string to RDKit.**
+The `constrain(...)` and `swappable(...)` tokens follow the CXSMILES block in
+the SMILES title field. They preserve lipid-specific semantics but are not
+standard CXSMILES fields; a toolkit may discard them when serializing again.
 
-The last row used to read `RG:` / ❌ hard parse failure. Replacing it with atom
-labels plus a trailing token means every string this crate emits now parses in
-both toolkits. The trailing token itself is *not* CXSMILES — it rides in the
-SMILES title field and is dropped when a toolkit re-serializes the molecule, so
-it must never be the only place a caveat lives. `dev/extension.md` §5.1.
+`canonicalize_cxsmiles` canonicalizes the molecular graph and updates every
+atom reference in `Sg:`, `m:`, atom labels, and atom properties. Lipid trailer
+tokens are retained and normalized with their referenced labels. Calling the
+function twice returns the same string.
 
-## Testing
+`smiles2name` always canonicalizes first. The reverse converter therefore does
+not depend on the exact atom or branch order produced by `name2smiles`. Before
+returning a name, it regenerates the structure and verifies canonical CXSMILES
+equivalence.
+
+## Lipid notation
+
+Explicit multi-chain names distinguish assignment confidence:
+
+- `/` means the sn positions are resolved, for example `PC 16:0/18:1(9Z)`.
+- `_` means the chains are known but their sn assignment is unresolved, for
+  example `PC 16:0_18:1`.
+
+Species-level sum compositions such as `PC 34:1`, `DG 36:2`, and `TG 54:3`
+are rejected because many chain combinations match them. Single-chain names
+such as `FA 18:1` remain valid.
+
+Supported classes include:
+
+- fatty-acyl and neutral-lipid forms: `FA`, `AMP-FA`, `NAE`, `CAR`, `CE`,
+  `MG`, `DG`, `TG`, and `CL`;
+- glycerophospholipids and lyso forms: `PC`, `PE`, `PS`, `PG`, `PI`, `PA`,
+  `LPC`, `LPE`, `LPS`, `LPG`, `LPI`, and `LPA`;
+- sphingolipids: `Cer`, `CerP`, `SM`, `HexCer`, `IPC`, `Sph`/`SB`, and `S1P`;
+- the chain-free sterol form `ST`.
+
+Chains may carry localized or unlocalized double bonds, geometry, supported
+Table 1A substituents, epoxides, and cyclic groups. Generic oxygen counts such
+as `;O2` are rejected unless the functional groups are specified.
+
+## Depiction and toolkit behavior
+
+CXSMILES support varies between chemistry toolkits. In particular, renderers
+that ignore `Sg:` see only the fixed scaffold and produce a truncated chain.
+Use `expand_cxsmiles_for_depiction` or `name2structure` before depiction. The
+expanded result is one representative layout; it does not turn an unknown
+position into a measurement.
+
+The position-variation `m:` field and atom labels are standard CXSMILES data.
+The lipid-specific trailer should be preserved separately if a toolkit rewrites
+the string.
+
+## Limitations
+
+- Carbohydrate sequences such as `Gal-Glc-Cer` do not determine glycosidic
+  linkage positions and are not converted.
+- A functional group on C1 of an acyl chain can change the linkage itself and
+  is rejected.
+- Confidence percentages are display metadata and are stripped before
+  structural conversion.
+- `smiles2name` recognizes structures within this crate's supported lipid
+  templates; it is not a general structure-to-name engine.
+- Some equivalent input names normalize to one spelling during reverse
+  conversion, such as `;ep(5)` to `;5Ep`.
+
+## Development
 
 ```bash
-cargo test                              # unit, golden and property tests
+cargo fmt --check
+cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-A cross-toolkit validator (`validate_cxsmiles.py`, RDKit and CDK Depict) lives
-with the design notes rather than in this repository — see *Documentation*.
+The test corpus is stored in `testdata/`:
 
-Two kinds of test, and the distinction is the point:
+- `name2smiles.csv` pins generated and depiction strings;
+- `chains.csv` validates per-chain carbon counts independently;
+- `doc_examples.csv` pins documentation examples.
 
-- **Golden** — `testdata/name2smiles.csv` records the exact strings emitted.
-  Catches regressions. Cannot catch a misconception: if an expected string was
-  wrong from the start, comparing against it passes forever, which is exactly
-  how three wrong blocks survived for as long as they did.
-- **Property** — `testdata/chains.csv` holds per-chain carbon counts read off
-  the *names* by hand, and the integration tests assert structural invariants
-  (every `m:` target is a `*`, every `R1` label lands on a wildcard, no block is
-  a query feature). These are statements about what the output must satisfy, not
-  recordings of what it currently does.
+After an intentional output-format change, run
+`cargo run --example bless_testdata` and review the corpus diff. For external
+toolkit validation, install RDKit and run:
 
-After a deliberate encoding change, `cargo run --example bless_testdata` rewrites
-the golden columns; then read `git diff testdata/` carefully, because that diff
-is the only review a golden file ever gets. `chains.csv` is never regenerated.
+```bash
+python scripts/validate_cxsmiles.py
+python scripts/validate_cxsmiles.py --cdk
+```
 
-### testdata
-
-| file | contents |
-|---|---|
-| `name2smiles.csv` | `name, cxsmiles, expanded` — 54 names covering every shape of ambiguity the generator emits |
-| `chains.csv` | `name, sn, carbons` — hand-written per-chain carbon counts |
-| `doc_examples.csv` | strings quoted in the design notes, pinned so the prose cannot drift |
-
-## Known limitations
-
-Documented at length in `dev/SMILES.md` §4:
-
-- **Table 1C carbohydrates are not handled.** `Gal-Glc-Cer` names the sugar
-  sequence but never the glycosidic linkage positions, so there is no single
-  honest structure to emit.
-- **A group on C1 of an acyl chain is refused.** `FA 18:0;1OMe` is the methyl
-  ester — a different linkage, not a substituted carbon, and the chain builder
-  cannot change the headgroup it is attached to.
-- **Confidence percentages have nowhere to live.** No CXSMILES construct
-  expresses *weighted* alternatives, so a 51% call and a 100% call are written
-  identically.
-- **Variable names run out at ten**, so a cardiolipin with four unlocalized
-  chains emits a constraint set that is inconsistent read as algebra.
-- **Species-level shorthand is rejected** rather than served, which is the most
-  common case in published data.
-
-## Documentation
-
-The `dev/` design notes are kept outside this repository. Sections of them are
-cited throughout this README and in the rustdoc, and the citations are stable:
-
-- `SMILES.md` — the technical write-up: every block, every trade-off, every
-  open problem, with depictions from both toolkits.
-- `NOMENCLATURE.md` — the supported name grammar, class by class.
-- `extension.md` — why the trailing token language replaced CXSMILES `RG:`.
-- `validate_cxsmiles.py` — the cross-toolkit validator.
+The `--cdk` option sends structures to the public CDK Depict service and
+therefore requires network access.
 
 ## License
 

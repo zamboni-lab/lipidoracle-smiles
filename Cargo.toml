@@ -2,16 +2,13 @@
 name = "lipid_notation"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.85"
 description = "Convert Shorthand2020 lipid names to SMILES/CXSMILES, encoding what was and wasn't determined"
 license = "MIT"
 repository = "https://github.com/zamboni-lab/lipidoracle-smiles"
 keywords = ["lipidomics", "smiles", "cxsmiles", "cheminformatics", "lipids"]
 categories = ["science"]
 
-# No dependencies, deliberately. The generator is string manipulation over
-# std collections only, which keeps it embeddable anywhere a lipid name needs
-# a structure.
 [dependencies]
-
-[dev-dependencies]
+chematic-core = "0.9"
+chematic-smiles = "0.9"

@@ -56,7 +56,7 @@ fn names(path: &Path) -> Vec<String> {
 /// file, which the generator cannot regenerate.
 fn note(name: &str) -> &'static str {
     match name {
-        "FA 18:0;ep(5)" => "older ;ep(pos) spelling of the Table 1A Ep group",
+        "FA 18:0;ep(5)" => "accepted ;ep(pos) alias for the Table 1A Ep group",
         _ => "",
     }
 }

@@ -1,9 +1,6 @@
-//! On-demand SMILES generation for lipid species/isomer names.
+//! Forward conversion from lipid notation to SMILES/CXSMILES.
 //!
-//! The public API wraps these entry points: see `name2smiles`,
-//! `name2structure` and `expand_cxsmiles_for_depiction` in `lib.rs`.
-//!
-//! `lipid_name_to_smiles` takes a canonical Shorthand2020 name —
+//! `generate_smiles` takes a canonical Shorthand2020 name —
 //! e.g. `"TG 18:0/18:0/18:1(9);5oxo"`,
 //! `"PC 16:0/20:4(5,8,11,14);15OH"`, or the documented project extension
 //! `"AMP-FA 20:4(5,8,11,14);15OH"` — and builds a flat (non-stereo)
@@ -35,28 +32,14 @@
 //! several, e.g. `PC 16:0_18:1(9)` becomes
 //! `C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CCCCCCCC=CCCCCCCCC)COC(=O)CCCCCCCCCCCCCCC |$;;;;;;;;;;;;;sn2;;;;;;;;;;;;;;;;;;;;;sn1$| swappable(sn1,sn2)`.
 //!
-//! Earlier revisions used a CXSMILES `RG:` Markush block for this, with the
-//! chains as R-group definitions. That could not coexist with `Sg:`/`m:` —
-//! CDK rejects a nested block inside a definition, so the sn ambiguity was
-//! silently dropped for any chain with an unlocalized feature — it
-//! over-generated, and RDKit could not parse it at all. See
-//! `dev/extension.md`.
-//!
-//! Two constructs are deliberately *not* used. `f:` groups components into
-//! one entity (a salt, a hydrate) and expresses *and*, never *or*, so it
-//! cannot say "this chain or that chain sits at sn-1"; earlier versions
-//! used it for exactly that. `ctu:` is a query feature for matching either
-//! configuration — a plain `C=C` is already unspecified geometry in SMILES,
-//! so emitting it added nothing and made every structure a query.
-//!
 //! ## Unlocalized double bonds
 //!
 //! Every chain builder is Sg:-aware: known double bonds/modifications are
 //! rendered literally (with geometry where declared), and any remaining
 //! *unlocalized* double bonds are represented with a CDK-style `Sg:n:`
 //! flexible-run marker plus an `x+y=N` size constraint, never with a
-//! guessed literal position. See `chain_fragment_cdk_range` and
-//! `CdkBuilder` for how a chain's local Sg:/m: blocks get offset and
+//! guessed literal position. See `build_chain_segment` and
+//! `CxBuilder` for how a chain's local Sg:/m: blocks get offset and
 //! merged into the surrounding headgroup template's global CXSMILES
 //! suffix. A double bond whose geometry is not explicit is left as a plain
 //! `C=C`, which is exactly what unspecified geometry means in SMILES;
@@ -74,8 +57,8 @@
 //! (`;11OH,15OH;9oxo`); a group named without one (`;OH`) is declared
 //! present but unlocalized and becomes an `m:` block; the parenthesized
 //! form carries a count or protects an abbreviation containing digits
-//! (`;(OH)2`, `;(NO2)`). This project's older `;OH(3,5)` and `;ep(5)`
-//! spellings still parse.
+//! (`;(OH)2`, `;(NO2)`). Compatibility aliases such as `;OH(3,5)` and
+//! `;ep(5)` are also accepted.
 //!
 //! `None` is returned when:
 //!
@@ -86,7 +69,7 @@
 //! * the group is one of [`UNRENDERABLE`], or sits on C1 of an acyl chain,
 //!   where the shorthand is naming a linkage rather than a substituent;
 //! * a chain's unlocalized double bonds have less room left than the `Sg:`
-//!   scaffold needs (see `chain_fragment_cdk_range`).
+//!   scaffold needs (see `build_chain_segment`).
 //!
 //! Table 1C's carbohydrates are headgroups rather than chain
 //! modifications — `Gal-Glc-Cer` names the sugar *sequence* but never the
@@ -191,13 +174,12 @@ struct ParsedChain {
 /// Entry point: build semantically correct SMILES/CXSMILES for one lipid species.
 ///
 /// For structures with variable content (unknown DBs, unknown mods, or
-/// unresolved regiochemistry): returns CDK-style CXSMILES with `Sg:`/`m:`/
-/// `RG:` blocks. For fully-known structures: returns plain SMILES (no
-/// CXSMILES suffix). Returns `None` if the headgroup isn't covered or a
-/// chain's oxygen count has no position hypothesis at all.
+/// unresolved regiochemistry), returns CXSMILES with `Sg:`, `m:`, and atom
+/// labels. Fully determined structures return plain SMILES. Unsupported or
+/// structurally under-specified names return `None`.
 ///
 /// Reference: https://egonw.github.io/cdk-cxsmiles/templates.html#lipids-with-two-double-bonds-somewhere-in-the-tail
-pub fn lipid_name_to_smiles(name: &str) -> Option<String> {
+pub(crate) fn generate_smiles(name: &str) -> Option<String> {
     let (canonical, _) = crate::nomenclature::split_display_name(name);
     build_lipid(&canonical, true).map(|b| b.smiles)
 }
@@ -206,21 +188,17 @@ pub fn lipid_name_to_smiles(name: &str) -> Option<String> {
 /// of its carbons — the mapping a UI needs to highlight the part of a
 /// structure that a given MS2 fragment comes from.
 ///
-/// Differs from [`lipid_name_to_smiles`] in two depiction-driven ways:
+/// Differs from [`generate_smiles`] in two depiction-driven ways:
 ///
-/// * `_`-joined (sn-unresolved) names are built as if they were `/`-joined,
-///   because the honest CXSMILES rendering — a backbone of `*` R-group slots
-///   plus `RG:` alternatives — is a Markush scheme rather than a molecule,
-///   and carries no concrete chain atoms for a viewer to highlight. The
-///   arbitrary sn assignment that buys a connected depiction is flagged via
-///   [`LipidStructure::regio_resolved`] so callers can say so.
+/// * `_`-joined names use one representative chain assignment and set
+///   [`LipidStructure::regio_resolved`] to `false`;
 /// * The `Sg:` unlocalized-double-bond markers are already expanded (see
 ///   [`expand_cxsmiles_for_depiction`]), and the atom indices account for
 ///   the padding atoms that expansion inserts.
 ///
 /// Atom indices are 0-based in SMILES emission order, which is the order
 /// RDKit (and every other parser) assigns when reading the string.
-pub fn lipid_name_to_structure(name: &str) -> Option<LipidStructure> {
+pub(crate) fn generate_structure(name: &str) -> Option<LipidStructure> {
     let (canonical, _) = crate::nomenclature::split_display_name(name);
     let labels = chain_label_tokens(&canonical);
     let built = build_lipid(&canonical, false)?;
@@ -308,8 +286,8 @@ fn is_sn_unresolved(name: &str) -> bool {
     }
 }
 
-/// Shared builder behind [`lipid_name_to_smiles`] and
-/// [`lipid_name_to_structure`]. `force` is the regiochemistry mode to use
+/// Shared builder behind [`generate_smiles`] and
+/// [`generate_structure`]. `force` is the regiochemistry mode to use
 /// for multi-chain `_`-joined names; `/`-joined and single-chain names are
 /// always resolved regardless.
 fn build_lipid(name: &str, mark_swappable: bool) -> Option<Built> {
@@ -375,7 +353,7 @@ fn build_lipid(name: &str, mark_swappable: bool) -> Option<Built> {
 /// by the EAD engines, to reject the same shorthand as a double-bond
 /// localization target in the first place (localizing a position within
 /// the *sum* would treat two real chains as if they were one).
-pub fn class_needs_multi_chain(class: &str) -> bool {
+pub(crate) fn class_needs_multi_chain(class: &str) -> bool {
     matches!(
         class,
         "DG" | "TG"
@@ -412,16 +390,15 @@ impl Built {
     }
 }
 
-/// A chain fragment (or, for `wildcard_fragment_cdk`, a disconnected
-/// standalone dot-joined component) with CDK CXSMILES ambiguity
-/// annotations, using LOCAL atom indices (0-based, counting every
+/// A chain fragment with CXSMILES ambiguity annotations, using local atom
+/// indices (0-based, counting every
 /// element/bracket-atom/`*` token from this fragment's own first atom)
 /// and LOCAL variable letters (always starting fresh at `a`). Embed into
-/// a larger assembled SMILES via `CdkBuilder::push_fragment`, which
+/// a larger assembled SMILES via `CxBuilder::push_fragment`, which
 /// offsets positions and renames variables so they don't collide with
 /// whatever came before in the assembly.
 #[derive(Debug, Default, Clone)]
-struct CdkFragment {
+struct CxFragment {
     smiles: String,
     sg_blocks: Vec<String>,
     constraint: Option<String>,
@@ -430,7 +407,7 @@ struct CdkFragment {
     /// order. Shorter than the chain's carbon count when `Sg:` markers
     /// stand in for a variable-length run — the atoms that
     /// `expand_cxsmiles_for_depiction` inserts fill the rest of the run in
-    /// place, so `lipid_name_to_structure` splices them back in after
+    /// place, so `generate_structure` splices them back in after
     /// expansion. Empty for non-chain fragments (bare `O` slots).
     carbon_atoms: Vec<usize>,
 }
@@ -439,11 +416,11 @@ struct CdkFragment {
 /// `EtherAlkenyl` gets its mandatory (never placeholder) vinyl-ether
 /// C1=C2 folded in before any of the chain's own declared double bonds.
 /// Sphingoid bases aren't chain fragments in this sense — see
-/// `sphingoid_smiles`, which uses `chain_fragment_cdk_range` directly
+/// `sphingoid_smiles`, which uses `build_chain_segment` directly
 /// with a `start` of 3 (after the fixed C1/C2 positions).
-fn chain_fragment_cdk(chain: &ParsedChain) -> Option<CdkFragment> {
+fn build_chain_fragment(chain: &ParsedChain) -> Option<CxFragment> {
     match chain.prefix {
-        ChainPrefix::Acyl => chain_fragment_cdk_range(
+        ChainPrefix::Acyl => build_chain_segment(
             1,
             chain.carbon,
             &chain.db_pos,
@@ -451,7 +428,7 @@ fn chain_fragment_cdk(chain: &ParsedChain) -> Option<CdkFragment> {
             &chain.rings,
             true,
         ),
-        ChainPrefix::EtherAlkyl => chain_fragment_cdk_range(
+        ChainPrefix::EtherAlkyl => build_chain_segment(
             1,
             chain.carbon,
             &chain.db_pos,
@@ -466,7 +443,7 @@ fn chain_fragment_cdk(chain: &ParsedChain) -> Option<CdkFragment> {
                 placeholder: false,
             }];
             db.extend(chain.db_pos.iter().copied());
-            chain_fragment_cdk_range(1, chain.carbon, &db, &chain.mods, &chain.rings, false)
+            build_chain_segment(1, chain.carbon, &db, &chain.mods, &chain.rings, false)
         }
         ChainPrefix::SphingoidD | ChainPrefix::SphingoidT => None,
     }
@@ -485,16 +462,16 @@ fn chain_fragment_cdk(chain: &ParsedChain) -> Option<CdkFragment> {
 /// to reach any one valid total length. Modifications with no position
 /// at all (`pos == 0`) become extra dot-joined fragments plus `m:`
 /// blocks, appended after the main chain.
-fn chain_fragment_cdk_range(
+fn build_chain_segment(
     start: u32,
     carbon: u32,
     db_pos: &[DbPos],
     mods: &[Mod],
     rings: &[Ring],
     carbonyl_c1: bool,
-) -> Option<CdkFragment> {
+) -> Option<CxFragment> {
     if carbon < start {
-        return Some(CdkFragment::default());
+        return Some(CxFragment::default());
     }
 
     let localized: Vec<DbPos> = db_pos.iter().copied().filter(|d| !d.placeholder).collect();
@@ -552,17 +529,8 @@ fn chain_fragment_cdk_range(
         );
 
         let remaining_length = carbon - prefix_len;
-        // The flexible run is written as a fixed `C(C=C)*C=CC` scaffold of
-        // `2 + 2n` carbons, and expansion can only *add* to it. If the tail
-        // left after the last localized feature is shorter than that, no
-        // split of the size constraint can bring the chain back to its
-        // declared length, and the string would silently claim more carbons
-        // than the name does — `FA 20:4;11OH` used to come out with 21.
-        //
-        // ponytail: rejects a tail of exactly `2n+1`, which a scaffold
-        // without the leading spacer carbon could still represent. Worth
-        // tightening only if such names show up; every existing `Sg:` string
-        // in the corpus is built on the current scaffold.
+        // The fixed scaffold contains `2 + 2n` carbons. Expansion only adds
+        // atoms, so shorter tails cannot represent the declared chain length.
         if remaining_length < 2 * unlocalized_count as u32 + 2 {
             return None;
         }
@@ -595,9 +563,7 @@ fn chain_fragment_cdk_range(
             };
             sg_blocks.push(format!("Sg:n:{}:{}:ht", atom, var));
         }
-        // The explicit terminal carbon above accounts for one more atom than
-        // the old C=C-ending template, so the variable-length total is one
-        // smaller.
+        // Fixed scaffold atoms are excluded from the variable-length total.
         let constraint_sum = remaining_length.saturating_sub(unlocalized_count as u32 + 1);
         constraint = Some(format!(
             "{}={}",
@@ -631,20 +597,9 @@ fn chain_fragment_cdk_range(
             return None; // nowhere on this chain to put the modification
         }
         let mut atom_count = count_atoms(&smiles);
-        // Each appended component leads with a `*` dummy, and the `m:`
-        // block points at that dummy rather than at the modification's own
-        // heteroatom. This is not cosmetic: a position-variation bond's
-        // variable end has to be a dummy atom carrying exactly one bond.
-        // Both toolkits enforce it — CDK ignores an `m:` whose target is
-        // anything else, and RDKit rejects the whole string ("position
-        // variation bond to atom with more than one bond"), so the older
-        // bracket-atom forms (`[OH]`, `[O]`, `[C](=O)O`) were inert at
-        // best. The dummy also supplies the free valence those brackets
-        // were there to reserve, so no explicit hydrogen counts are
-        // needed. The component is the dummy plus the group's own
-        // `SUBSTITUENTS` branch, so a hydroxyl or ketone contributes just
-        // its oxygen (`*O`, `*=O`) while a carboxyl brings a carbon of its
-        // own (`*C(=O)O`).
+        // Position-variation bonds target a singly bonded wildcard. The
+        // component is the wildcard plus the substituent branch (`*O`,
+        // `*=O`, `*C(=O)O`, and so on).
         for m in &unlocalized_mods {
             let component = format!("*{}", m.branch);
             smiles.push('.');
@@ -654,7 +609,7 @@ fn chain_fragment_cdk_range(
         }
     }
 
-    Some(CdkFragment {
+    Some(CxFragment {
         smiles,
         sg_blocks,
         constraint,
@@ -665,18 +620,18 @@ fn chain_fragment_cdk_range(
 
 /// A glycerol-ester/ether slot: `"O" + fragment` for a real chain, or a
 /// bare free hydroxyl `"O"` when the position is empty/absent.
-fn slot_fragment_cdk(chain: Option<&ParsedChain>) -> Option<CdkFragment> {
+fn build_chain_slot(chain: Option<&ParsedChain>) -> Option<CxFragment> {
     match chain {
-        None => Some(CdkFragment {
+        None => Some(CxFragment {
             smiles: "O".to_string(),
             ..Default::default()
         }),
-        Some(c) if c.carbon == 0 => Some(CdkFragment {
+        Some(c) if c.carbon == 0 => Some(CxFragment {
             smiles: "O".to_string(),
             ..Default::default()
         }),
         Some(c) => {
-            let frag = chain_fragment_cdk(c)?;
+            let frag = build_chain_fragment(c)?;
             // Prepending "O" adds one atom ahead of everything in `frag`,
             // so its own Sg:/m: positions (local to frag.smiles alone)
             // must shift by 1 to stay correct in the combined smiles —
@@ -689,7 +644,7 @@ fn slot_fragment_cdk(chain: Option<&ParsedChain>) -> Option<CdkFragment> {
                 .map(|b| offset_sg_block(b, 1, &no_renaming))
                 .collect();
             let m_blocks = frag.m_blocks.iter().map(|b| offset_m_block(b, 1)).collect();
-            Some(CdkFragment {
+            Some(CxFragment {
                 smiles: format!("O{}", frag.smiles),
                 sg_blocks,
                 constraint: frag.constraint,
@@ -707,7 +662,7 @@ fn slot_fragment_cdk(chain: Option<&ParsedChain>) -> Option<CdkFragment> {
 /// (which always start fresh at `a`) so they don't collide with an
 /// earlier fragment's.
 #[derive(Default)]
-struct CdkBuilder {
+struct CxBuilder {
     smiles: String,
     sg_blocks: Vec<String>,
     m_blocks: Vec<String>,
@@ -733,7 +688,7 @@ struct CdkBuilder {
     chains: Vec<(usize, Vec<usize>)>,
 }
 
-impl CdkBuilder {
+impl CxBuilder {
     /// Appends fixed, unambiguous literal SMILES text (headgroup
     /// backbone pieces, linking atoms, ring closures, ...).
     fn push_fixed(&mut self, text: &str) {
@@ -743,7 +698,7 @@ impl CdkBuilder {
 
     /// Appends a chain fragment, offsetting/renaming its local `Sg:`/`m:`
     /// blocks and constraint into this assembly's global numbering.
-    fn push_fragment(&mut self, frag: &CdkFragment) {
+    fn push_fragment(&mut self, frag: &CxFragment) {
         let local_var_count = frag.sg_blocks.len();
         let var_names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
         let renaming: HashMap<char, char> = (0..local_var_count)
@@ -776,7 +731,7 @@ impl CdkBuilder {
     /// `push_fragment` for a fragment that *is* one of the lipid's chains,
     /// additionally recording where its carbons landed. Fragments with no
     /// carbons (an empty slot's bare `O`) are appended but not recorded.
-    fn push_chain(&mut self, frag: &CdkFragment, sn: usize) {
+    fn push_chain(&mut self, frag: &CxFragment, sn: usize) {
         let base = self.atom_offset;
         let carbons: Vec<usize> = frag.carbon_atoms.iter().map(|a| a + base).collect();
         self.push_fragment(frag);
@@ -792,8 +747,8 @@ impl CdkBuilder {
     /// Finalizes the assembly into the final string: base SMILES, the
     /// CXSMILES `|...|` block, then the trailing token list.
     ///
-    /// The tokens are ours, not CXSMILES — see `dev/extension.md`. They sit
-    /// in what a SMILES reader treats as the title field, and they only ever
+    /// The lipid-specific tokens sit in what a SMILES reader treats as the
+    /// title field, and they only ever
     /// name things the `|...|` block also carries (`Sg:` variables,
     /// `$...$` atom labels), never atom positions, which no longer mean
     /// anything once a toolkit has renumbered the molecule.
@@ -979,7 +934,7 @@ pub(crate) fn count_atoms(smiles: &str) -> usize {
 }
 
 /// Resolves this generator's `Sg:n:pos:var:ht` unlocalized-double-bond
-/// markers (see module docs and [`build_cdk_chain_smiles`]) into one
+/// markers (see module docs and [`build_chain_segment`]) into one
 /// concrete, fully-connected SMILES, for depiction purposes.
 ///
 /// External SMILES renderers (chematic, RDKit, ...) have no notion of
@@ -990,19 +945,15 @@ pub(crate) fn count_atoms(smiles: &str) -> usize {
 /// the base SMILES text), so the resulting depiction is a truncated stub.
 ///
 /// Each Sg-marked atom is itself already the first unit of its own
-/// variable's count (see `build_cdk_chain_smiles`, which always emits
+/// variable's count (see `build_chain_segment`, which always emits
 /// exactly one hardcoded atom per marker regardless of that variable's
 /// eventual value), so only `value - 1` extra `C` atoms need inserting
 /// after it. Any one valid split of each constraint sum across its
 /// variables depicts an equally valid resolution, since the true
 /// distribution is by definition unlocalized; this picks an even split.
 ///
-/// An unlocalized modification's `m:` block is deliberately *not* resolved
-/// to a specific carbon — forcing one would depict a positional claim the
-/// name doesn't make, so it stays a dot-separated `*`-led component. The
-/// `RG:` block is left alone; a depiction that needs one concrete chain per
-/// sn position comes from [`lipid_name_to_structure`], which builds the
-/// resolved layout instead of expanding this one.
+/// An unlocalized modification's `m:` block is not resolved to a specific
+/// carbon, so its dot-separated wildcard component remains unchanged.
 ///
 /// Returns the input unchanged if it has no CXSMILES suffix or nothing
 /// to expand.
@@ -1043,7 +994,7 @@ fn expand_with_padding_inserts(smi: &str) -> (String, Vec<(usize, usize)>) {
 
     // Each `constrain(a+b=N)` corresponds, in order, to the next `n_terms`
     // Sg positions: variable *names* can repeat across independently
-    // numbered chains (`CdkBuilder`'s var_offset wraps at ten), so positional
+    // numbered chains (`CxBuilder`'s var_offset wraps at ten), so positional
     // matching against emission order — not name matching — is what stays
     // unambiguous here.
     let mut inserts: Vec<(usize, usize)> = Vec::new();
@@ -1072,10 +1023,8 @@ fn expand_with_padding_inserts(smi: &str) -> (String, Vec<(usize, usize)>) {
 /// The `constrain(...)` equations of a trailer, as `(term count, sum)` in
 /// order.
 ///
-/// The trailer is a `;`-separated token list (`dev/extension.md`); a trailer
-/// carrying no token syntax at all is read as the pre-token spelling, a
-/// comma-separated list of bare `a+b=15` equations, so strings written before
-/// the tokens existed still expand correctly.
+/// The trailer is normally a `;`-separated token list. Comma-separated bare
+/// `a+b=15` equations are accepted as a compatibility spelling.
 pub(crate) fn trailer_equations(trailer: &str) -> Vec<(usize, usize)> {
     let equation = |eq: &str| -> Option<(usize, usize)> {
         let (lhs, rhs) = eq.split_once('=')?;
@@ -1141,7 +1090,7 @@ fn insert_padding_atoms(smi: &str, inserts: &[(usize, usize)]) -> String {
                 }
             }
             if let Some(&n) = insert_map.get(&atom_idx) {
-                out.extend(std::iter::repeat('C').take(n));
+                out.extend(std::iter::repeat_n('C', n));
             }
             atom_idx += 1;
             continue;
@@ -1152,7 +1101,7 @@ fn insert_padding_atoms(smi: &str, inserts: &[(usize, usize)]) -> String {
         ) {
             out.push(c);
             if let Some(&n) = insert_map.get(&atom_idx) {
-                out.extend(std::iter::repeat('C').take(n));
+                out.extend(std::iter::repeat_n('C', n));
             }
             atom_idx += 1;
         } else {
@@ -1358,8 +1307,7 @@ fn parse_chain_token(tok: &str) -> Option<ParsedChain> {
 /// * `(OH)2`, `(NO2)` — the paper's parenthesized form, used when a group
 ///   occurs more than once (followed by the count) or when its abbreviation
 ///   itself contains digits. Positions are undetermined.
-/// * `OH(3,5)`, `ep(5)` — this project's older explicit-position form,
-///   still accepted.
+/// * `OH(3,5)`, `ep(5)` — compatibility aliases for positioned groups.
 /// * `11OH,15OH`, `3Me,7Me`, `oxo` — position (optional) in front of the
 ///   abbreviation, comma-separated, which is what the paper specifies.
 /// * `O`, `O2` — a bare count of oxygens with no group breakdown at all.
@@ -1393,7 +1341,7 @@ fn parse_modification_segment(
 
     if let Some((abbr, rest)) = seg.split_once('(') {
         let positions = parse_plain_position_list(rest.strip_suffix(')')?)?;
-        if let Some(ring_size) = legacy_ring_size(abbr) {
+        if let Some(ring_size) = alias_ring_size(abbr) {
             for p in positions {
                 rings.push(ring_at(p, ring_size, carbon)?);
             }
@@ -1408,7 +1356,7 @@ fn parse_modification_segment(
         let digits_end = part.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
         let (pos, abbr) = part.split_at(digits_end);
         let pos: u32 = if pos.is_empty() { 0 } else { pos.parse().ok()? };
-        if let Some(ring_size) = legacy_ring_size(abbr) {
+        if let Some(ring_size) = alias_ring_size(abbr) {
             rings.push(ring_at(pos, ring_size, carbon)?);
         } else if let Some(branch) = substituent(abbr) {
             mods.push(Mod { pos, branch });
@@ -1429,8 +1377,7 @@ fn parse_modification_segment(
     Some(())
 }
 
-/// The `SUBSTITUENTS` branch for one Table 1A abbreviation, plus the two
-/// spelled-out aliases this project accepted before the table existed.
+/// The `SUBSTITUENTS` branch for a Table 1A abbreviation or accepted alias.
 fn substituent(abbr: &str) -> Option<&'static str> {
     match abbr {
         "hydroxy" => Some("O"),
@@ -1442,10 +1389,8 @@ fn substituent(abbr: &str) -> Option<&'static str> {
     }
 }
 
-/// Ring size for the older `ep(5)`/`cyc(5)` position-in-parens spellings,
-/// which name only the ring's first carbon. An epoxide spans two carbons,
-/// a cyclopropane three.
-fn legacy_ring_size(abbr: &str) -> Option<u32> {
+/// Ring size for the `ep(5)`/`cyc(5)` compatibility aliases.
+fn alias_ring_size(abbr: &str) -> Option<u32> {
     match abbr {
         "Ep" | "ep" | "epox" => Some(2),
         "cyc" | "cyclo" => Some(3),
@@ -1533,13 +1478,13 @@ fn parse_ring_segment(seg: &str, carbon: u32, ring_db: &mut Vec<DbPos>) -> Optio
 /// bond between Ck and Ck+1); missing keys mean a plain single bond.
 /// `db_pos` must only contain known (non-placeholder) double bonds —
 /// unlocalized ones are represented separately via `Sg:` blocks (see
-/// `chain_fragment_cdk_range`), never as a literal position here.
+/// `build_chain_segment`), never as a literal position here.
 ///
 /// A carbon carrying functional groups gets them as branches in table
 /// order, after any ring-closure label: `C%10(O)(C)`. Ring labels use the
 /// two-digit `%nn` form starting at `%10` because the single digits are
 /// already spoken for by the fixed headgroup templates (the sterol nucleus
-/// alone uses 1, 2 and 3); `CdkBuilder::push_fragment` renumbers them
+/// alone uses 1, 2 and 3); `CxBuilder::push_fragment` renumbers them
 /// upward as fragments are assembled, exactly as it does the `Sg:`
 /// variable letters.
 fn chain_tokens(
@@ -1661,7 +1606,7 @@ fn build_chain_range(
 // ---------- headgroup builders ----------
 //
 // Each builder writes one lipid class's fixed template and delegates its
-// variable slots to `slot_fragment_cdk`/`chain_fragment_cdk`, which return a
+// variable slots to `build_chain_slot`/`build_chain_fragment`, which return a
 // chain fragment starting at C1 ready to be attached after the linking
 // heteroatom (`O` for ester/ether, `N` for amide) the template itself writes.
 
@@ -1670,8 +1615,8 @@ fn fa_smiles(chains: &[ParsedChain]) -> Option<Built> {
     if c.carbon == 0 || c.prefix != ChainPrefix::Acyl {
         return None;
     }
-    let frag = chain_fragment_cdk(c)?;
-    let mut b = CdkBuilder::default();
+    let frag = build_chain_fragment(c)?;
+    let mut b = CxBuilder::default();
     b.push_fixed("O");
     b.push_chain(&frag, 1);
     Some(b.finish())
@@ -1687,8 +1632,8 @@ fn amp_fa_smiles(chains: &[ParsedChain]) -> Option<Built> {
     if c.carbon == 0 || c.prefix != ChainPrefix::Acyl {
         return None;
     }
-    let frag = chain_fragment_cdk(c)?;
-    let mut b = CdkBuilder::default();
+    let frag = build_chain_fragment(c)?;
+    let mut b = CxBuilder::default();
     b.push_fixed("[n+]1ccccc1-c1ccc(CN");
     b.push_chain(&frag, 1);
     b.push_fixed(")cc1");
@@ -1700,8 +1645,8 @@ fn nae_smiles(chains: &[ParsedChain]) -> Option<Built> {
     if c.carbon == 0 || c.prefix != ChainPrefix::Acyl {
         return None;
     }
-    let frag = chain_fragment_cdk(c)?;
-    let mut b = CdkBuilder::default();
+    let frag = build_chain_fragment(c)?;
+    let mut b = CxBuilder::default();
     b.push_fixed("OCCN");
     b.push_chain(&frag, 1);
     Some(b.finish())
@@ -1712,14 +1657,14 @@ fn car_smiles(chains: &[ParsedChain]) -> Option<Built> {
     if c.carbon == 0 || c.prefix != ChainPrefix::Acyl {
         return None;
     }
-    let frag = chain_fragment_cdk(c)?;
+    let frag = build_chain_fragment(c)?;
     // The ester O needs two real bonds: to the chain's carbonyl carbon
     // (C1, i.e. frag's own first atom) and to carnitine's chiral carbon.
     // Writing the chain as a branch straight off O keeps both bonds
     // explicit without touching [C@H]'s neighbor order (O still precedes
     // it in the text exactly as before), so no stereo re-derivation is
     // needed.
-    let mut b = CdkBuilder::default();
+    let mut b = CxBuilder::default();
     b.push_fixed("O(");
     b.push_chain(&frag, 1);
     b.push_fixed(")[C@H](CC(=O)[O-])C[N+](C)(C)C");
@@ -1731,8 +1676,8 @@ fn ce_smiles(chains: &[ParsedChain]) -> Option<Built> {
     if c.carbon == 0 || c.prefix != ChainPrefix::Acyl {
         return None;
     }
-    let frag = chain_fragment_cdk(c)?;
-    let mut b = CdkBuilder::default();
+    let frag = build_chain_fragment(c)?;
+    let mut b = CxBuilder::default();
     b.push_fixed("C12(CC=C3CC(O");
     b.push_chain(&frag, 1);
     b.push_fixed(")CCC3(C)C1CCC1(C)C(C(C)CCCC(C)C)CCC21)");
@@ -1757,12 +1702,12 @@ fn glycerolipid_smiles(chains: &[ParsedChain], slots: usize, swappable: bool) ->
         return None;
     }
     // A slot beyond this class's count is a free hydroxyl, which is
-    // exactly what `slot_fragment_cdk(None)` builds.
-    let sn1 = slot_fragment_cdk(chains.first())?;
-    let sn2 = slot_fragment_cdk(chains.get(1).filter(|_| slots >= 2))?;
-    let sn3 = slot_fragment_cdk(chains.get(2).filter(|_| slots >= 3))?;
+    // exactly what `build_chain_slot(None)` builds.
+    let sn1 = build_chain_slot(chains.first())?;
+    let sn2 = build_chain_slot(chains.get(1).filter(|_| slots >= 2))?;
+    let sn3 = build_chain_slot(chains.get(2).filter(|_| slots >= 3))?;
 
-    let mut b = CdkBuilder {
+    let mut b = CxBuilder {
         swappable,
         ..Default::default()
     };
@@ -1785,9 +1730,9 @@ fn gpl_smiles(headgroup_tail: &str, chains: &[ParsedChain], swappable: bool) -> 
     if chains.is_empty() || chains.len() > 2 {
         return None;
     }
-    let sn1 = slot_fragment_cdk(chains.first())?;
-    let sn2 = slot_fragment_cdk(chains.get(1))?;
-    let mut b = CdkBuilder {
+    let sn1 = build_chain_slot(chains.first())?;
+    let sn2 = build_chain_slot(chains.get(1))?;
+    let mut b = CxBuilder {
         swappable,
         ..Default::default()
     };
@@ -1806,12 +1751,12 @@ fn cl_smiles(chains: &[ParsedChain], swappable: bool) -> Option<Built> {
     if chains.len() != 4 {
         return None;
     }
-    let sn1 = slot_fragment_cdk(chains.first())?;
-    let sn2 = slot_fragment_cdk(chains.get(1))?;
-    let sn3 = slot_fragment_cdk(chains.get(2))?;
-    let sn4 = slot_fragment_cdk(chains.get(3))?;
+    let sn1 = build_chain_slot(chains.first())?;
+    let sn2 = build_chain_slot(chains.get(1))?;
+    let sn3 = build_chain_slot(chains.get(2))?;
+    let sn4 = build_chain_slot(chains.get(3))?;
 
-    let mut b = CdkBuilder {
+    let mut b = CxBuilder {
         swappable,
         ..Default::default()
     };
@@ -1856,17 +1801,17 @@ fn sphingoid_smiles(
         }
     }
 
-    let rest = chain_fragment_cdk_range(3, base.carbon, &base.db_pos, &mods, &base.rings, false)?;
+    let rest = build_chain_segment(3, base.carbon, &base.db_pos, &mods, &base.rings, false)?;
 
     let n_frag = match n_acyl {
         Some(acyl) if acyl.carbon > 0 && acyl.prefix == ChainPrefix::Acyl => {
-            Some(chain_fragment_cdk(acyl)?)
+            Some(build_chain_fragment(acyl)?)
         }
         Some(_) => return None,
         None => None,
     };
 
-    let mut b = CdkBuilder::default();
+    let mut b = CxBuilder::default();
     // The template writes C2 first (it carries the N branch), then C1; the
     // base's own `rest` fragment picks up from C3, so the base chain's
     // C1..Cn run starts with those two fixed atoms.
@@ -1969,7 +1914,7 @@ mod tests {
     /// Every mapped carbon must actually be a carbon, the run must cover
     /// the whole chain exactly once, and chains must not overlap.
     fn assert_chain_map_sane(name: &str, expected: &[(usize, usize)]) {
-        let st = lipid_name_to_structure(name).unwrap_or_else(|| panic!("{name} should resolve"));
+        let st = generate_structure(name).unwrap_or_else(|| panic!("{name} should resolve"));
         assert_balanced(&st.smiles);
         assert!(
             !st.smiles.contains(" |"),
@@ -2049,7 +1994,7 @@ mod tests {
     /// `regio_resolved` instead.
     #[test]
     fn structure_builds_sn_unresolved_names_as_one_connected_molecule() {
-        let st = lipid_name_to_structure("PC 16:0_18:1(9)").expect("should resolve");
+        let st = generate_structure("PC 16:0_18:1(9)").expect("should resolve");
         assert!(
             !st.regio_resolved,
             "sn assignment should be flagged as arbitrary"
@@ -2067,7 +2012,7 @@ mod tests {
         assert_chain_map_sane("PC 16:0_18:1(9)", &[(1, 16), (2, 18)]);
 
         // The stored form carries the same atoms plus the ambiguity.
-        let plain = lipid_name_to_smiles("PC 16:0_18:1(9)").expect("should resolve");
+        let plain = generate_smiles("PC 16:0_18:1(9)").expect("should resolve");
         assert!(
             plain.starts_with(&st.smiles) && plain.contains("swappable(sn1,sn2)"),
             "stored form should be the depiction plus the sn statement: {plain}"
@@ -2078,7 +2023,7 @@ mod tests {
     /// C9 must sit between the 9th and 10th mapped atoms.
     #[test]
     fn structure_map_carbon_numbering_lines_up_with_declared_db_position() {
-        let st = lipid_name_to_structure("FA 18:1(9)").expect("should resolve");
+        let st = generate_structure("FA 18:1(9)").expect("should resolve");
         let chain = &st.chains[0];
         let c9 = chain.carbons[8];
         let c10 = chain.carbons[9];
@@ -2110,7 +2055,7 @@ mod tests {
 
     #[test]
     fn tg_with_oxo_and_localized_db() {
-        let s = lipid_name_to_smiles("TG 18:0/18:0/18:1(9);5oxo").expect("should resolve");
+        let s = generate_smiles("TG 18:0/18:0/18:1(9);5oxo").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("C(=O)CCCC(=O)CCCC=CCCCCCCCC"));
         // Every position is known, so nothing is left to annotate.
@@ -2119,7 +2064,7 @@ mod tests {
 
     #[test]
     fn pc_with_geometry() {
-        let s = lipid_name_to_smiles("PC 16:0/18:1(9Z)").expect("should resolve");
+        let s = generate_smiles("PC 16:0/18:1(9Z)").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("[N+](C)(C)C"));
         assert!(s.contains("/C=C\\"));
@@ -2127,22 +2072,18 @@ mod tests {
 
     #[test]
     fn pe_trans_geometry() {
-        let s = lipid_name_to_smiles("PE 16:0/18:1(9E)").expect("should resolve");
+        let s = generate_smiles("PE 16:0/18:1(9E)").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("/C=C/"));
     }
 
     #[test]
     fn fa_unlocalized_db_gets_sg_blocks() {
-        let s = lipid_name_to_smiles("FA 20:4").expect("should resolve via Sg: blocks");
+        let s = generate_smiles("FA 20:4").expect("should resolve via Sg: blocks");
         assert_balanced(&s);
         assert!(
             s.contains(" |Sg:"),
             "unlocalized double bonds should be flagged with Sg:"
-        );
-        assert!(
-            !s.contains("RG:"),
-            "single chain has no regiochemistry ambiguity"
         );
         let sg_count = s.matches("Sg:n:").count();
         assert_eq!(
@@ -2171,14 +2112,14 @@ mod tests {
 
     #[test]
     fn fa_fully_saturated_resolves() {
-        let s = lipid_name_to_smiles("FA 16:0").expect("should resolve");
+        let s = generate_smiles("FA 16:0").expect("should resolve");
         assert_balanced(&s);
         assert_eq!(s, "OC(=O)CCCCCCCCCCCCCCC");
     }
 
     #[test]
     fn amp_fa_hete() {
-        let s = lipid_name_to_smiles("AMP-FA 20:4(5,8,11,14);15OH").expect("should resolve");
+        let s = generate_smiles("AMP-FA 20:4(5,8,11,14);15OH").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("[n+]1ccccc1"));
         assert!(s.contains("C(O)")); // localized hydroxyl
@@ -2194,7 +2135,7 @@ mod tests {
 
     #[test]
     fn shorthand2020_functional_group_order_is_accepted() {
-        let s = lipid_name_to_smiles("FA 20:4(5,8,11,14);15OH")
+        let s = generate_smiles("FA 20:4(5,8,11,14);15OH")
             .expect("Shorthand2020 hydroxyl syntax should resolve");
         assert_balanced(&s);
         assert!(s.contains("C(O)"));
@@ -2206,16 +2147,15 @@ mod tests {
     #[test]
     fn confidence_display_tail_is_ignored_by_structure_parser() {
         for tail in ["", " [DB sn1: Δ5 100%, Δ8 100% | Δ14 50%]"] {
-            let s = lipid_name_to_smiles(&format!("FA 20:4(5,8,11,14);15OH{tail}"))
+            let s = generate_smiles(&format!("FA 20:4(5,8,11,14);15OH{tail}"))
                 .expect("display tail must not make the canonical structure unparsable");
             assert_balanced(&s);
         }
-        // `FA 20:4;11OH` leaves 9 carbons after the hydroxyl for four
-        // unlocalized double bonds, one short of what the `Sg:` scaffold
-        // needs. It used to emit a 21-carbon chain for a 20-carbon name.
-        assert_eq!(lipid_name_to_smiles("FA 20:4;11OH"), None);
+        // The space remaining after the hydroxyl cannot hold four
+        // unlocalized double bonds without exceeding the named chain length.
+        assert_eq!(generate_smiles("FA 20:4;11OH"), None);
         assert_eq!(
-            lipid_name_to_smiles("FA 20:4;11OH [DB sn1: Δ5 100%]"),
+            generate_smiles("FA 20:4;11OH [DB sn1: Δ5 100%]"),
             None,
             "tail-stripping must not change the answer"
         );
@@ -2225,12 +2165,12 @@ mod tests {
     fn amp_fa_unlocalized_oxygen_returns_none() {
         // generic ;O with no OH/oxo/COOH breakdown -> still ambiguous, no
         // placeholder convention was requested for oxygen sites.
-        assert!(lipid_name_to_smiles("AMP-FA 20:4(5,8,11,14);O").is_none());
+        assert!(generate_smiles("AMP-FA 20:4(5,8,11,14);O").is_none());
     }
 
     #[test]
     fn lpc_single_chain_free_oh() {
-        let s = lipid_name_to_smiles("LPC 16:0").expect("should resolve");
+        let s = generate_smiles("LPC 16:0").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("(O)"));
         assert!(!s.contains('|'));
@@ -2238,29 +2178,24 @@ mod tests {
 
     #[test]
     fn cer_d18_1_16_0() {
-        let s = lipid_name_to_smiles("Cer d18:1(4)/16:0").expect("should resolve");
+        let s = generate_smiles("Cer d18:1(4)/16:0").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("NC(=O)CCCCCCCCCCCCCCC"));
     }
 
     #[test]
     fn sm_d18_1_16_0() {
-        let s = lipid_name_to_smiles("SM d18:1(4)/16:0").expect("should resolve");
+        let s = generate_smiles("SM d18:1(4)/16:0").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("[N+](C)(C)C"));
     }
 
     #[test]
     fn slot_fragment_unlocalized_db_expands_without_corrupting_carbonyl_branch() {
-        // Regression test: slot_fragment_cdk() prepends "O" to a chain's
-        // fragment (the glycerol-ester link) but was not shifting that
-        // chain's own Sg: positions to account for the new atom, so
-        // expansion inserted padding carbons *inside* the C1 carbonyl's
-        // `(=O)` branch instead of after it -- producing an invalid
-        // (3-bonded) oxygen and breaking depiction for any Resolved-mode
-        // chain (single chain, or "/"-joined) with an unlocalized DB.
+        // The glycerol-ester prefix must shift the chain's Sg atom indexes,
+        // keeping expansion outside the C1 carbonyl branch.
         for name in ["LPC 18:2", "PC 18:2/14:1", "PE 18:2/14:1", "LPE 18:2"] {
-            let s = lipid_name_to_smiles(name).expect("should resolve");
+            let s = generate_smiles(name).expect("should resolve");
             assert_balanced(&s);
             let expanded = expand_cxsmiles_for_depiction(&s);
             assert!(!expanded.contains('|'));
@@ -2273,7 +2208,7 @@ mod tests {
 
         // LPC 18:2: glycerophosphocholine backbone (11 headgroup atoms +
         // 3 glycerol carbons + 1 free OH) + an 18-carbon acyl chain.
-        let s = lipid_name_to_smiles("LPC 18:2").unwrap();
+        let s = generate_smiles("LPC 18:2").unwrap();
         let expanded = expand_cxsmiles_for_depiction(&s);
         assert_eq!(
             expanded.chars().filter(|&c| c == 'C').count(),
@@ -2285,7 +2220,7 @@ mod tests {
 
     #[test]
     fn ce_18_1() {
-        let s = lipid_name_to_smiles("CE 18:1(9Z)").expect("should resolve");
+        let s = generate_smiles("CE 18:1(9Z)").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("/C=C\\"));
     }
@@ -2293,11 +2228,8 @@ mod tests {
     #[test]
     fn car_ester_oxygen_bonds_to_the_carbonyl_carbon() {
         // Acylcarnitine: R-C(=O)-O-CH(CH2COO-)-CH2-N+(CH3)3. The ester O
-        // must bond to the chain's carbonyl carbon (C1), not to its
-        // omega end -- regression test for a bug where the chain was
-        // concatenated before "O[C@H]...", bonding O to the chain's last
-        // (omega) atom instead.
-        let s = lipid_name_to_smiles("CAR 18:0").expect("should resolve");
+        // bonds directly to the chain's carbonyl carbon (C1).
+        let s = generate_smiles("CAR 18:0").expect("should resolve");
         assert_balanced(&s);
         assert_eq!(s, "O(C(=O)CCCCCCCCCCCCCCCCC)[C@H](CC(=O)[O-])C[N+](C)(C)C");
         assert!(
@@ -2305,7 +2237,7 @@ mod tests {
             "ester O must be directly bonded to the carbonyl carbon"
         );
 
-        let s2 = lipid_name_to_smiles("CAR 18:1").expect("should resolve");
+        let s2 = generate_smiles("CAR 18:1").expect("should resolve");
         assert_balanced(&s2);
         assert!(s2.starts_with("O(C(=O)"));
         let expanded = expand_cxsmiles_for_depiction(&s2);
@@ -2316,25 +2248,21 @@ mod tests {
     }
 
     #[test]
-    fn cl_unlocalized_db_gets_placeholders() {
+    fn cl_unlocalized_db_gets_sg_regions() {
         // LipidOracle's EAD engines always join CL/DG/TG chains with "_",
         // never "/".
-        let s = lipid_name_to_smiles("CL 18:2_18:2_18:2_18:2").expect("should resolve");
+        let s = generate_smiles("CL 18:2_18:2_18:2_18:2").expect("should resolve");
         assert_balanced(&s);
         assert!(
             s.contains("Sg:n:"),
             "unlocalized double bonds should be flagged with Sg:"
         );
-        // Sg: needs its atoms in the main SMILES and CDK rejects a nested
-        // block inside an RG: definition, so these chains cannot also carry
-        // the sn ambiguity — the double-bond claim wins and the sn
-        // assignment shown is one arbitrary order.
-        assert!(!s.contains("RG:"), "{s}");
+        assert!(s.contains("swappable(sn1,sn2,sn3,sn4)"), "{s}");
     }
 
     #[test]
     fn cl_four_chains_saturated_still_unresolved_regiochemistry() {
-        let s = lipid_name_to_smiles("CL 18:0_18:0_18:0_18:0").expect("should resolve");
+        let s = generate_smiles("CL 18:0_18:0_18:0_18:0").expect("should resolve");
         assert_balanced(&s);
         // CL is always "_"-joined by this codebase's own convention, so
         // regiochemistry is unresolved even though every chain here is
@@ -2353,24 +2281,19 @@ mod tests {
     #[test]
     fn pc_slash_joined_stays_resolved_even_if_incomplete() {
         // "/" always means resolved, regardless of chain count.
-        let s = lipid_name_to_smiles("PC 16:0/18:1(9Z)").expect("should resolve");
-        assert!(!s.contains("f:"));
+        let s = generate_smiles("PC 16:0/18:1(9Z)").expect("should resolve");
+        assert!(!s.contains("swappable("));
     }
 
     #[test]
-    fn pc_underscore_joined_with_unlocalized_chains_keeps_sg_over_rg() {
-        let s = lipid_name_to_smiles("PC 16:1_18:1").expect("should resolve via Sg: blocks");
+    fn pc_underscore_joined_with_unlocalized_chains_keeps_all_ambiguity() {
+        let s = generate_smiles("PC 16:1_18:1").expect("should resolve via Sg: blocks");
         assert_balanced(&s);
         assert!(
             s.contains("Sg:n:"),
             "unlocalized double bonds should be flagged with Sg:"
         );
-        // The sn ambiguity is the one that has to give: `Sg:` indexes atoms
-        // of the main SMILES, and CDK rejects a nested block inside an `RG:`
-        // definition, so a chain needing `Sg:` cannot become an R-group
-        // alternative. Two chains here need one, so no `RG:` is emitted and
-        // the sn order shown is arbitrary.
-        assert!(!s.contains("RG:"), "{s}");
+        assert!(s.contains("swappable(sn1,sn2)"), "{s}");
         assert_eq!(
             s.matches('*').count(),
             0,
@@ -2380,7 +2303,7 @@ mod tests {
 
     #[test]
     fn unknown_headgroup_returns_none() {
-        assert!(lipid_name_to_smiles("PIP2 16:0/18:1(9)").is_none());
+        assert!(generate_smiles("PIP2 16:0/18:1(9)").is_none());
     }
 
     #[test]
@@ -2401,7 +2324,7 @@ mod tests {
         // to reject sum-composition parents (e.g. "PC O-32:1", no chain
         // split) before attempting to localize a double bond "within" the
         // sum as if it were one real chain -- keep this in sync with
-        // lipid_name_to_smiles's own shorthand rejection above.
+        // generate_smiles's own shorthand rejection above.
         for class in [
             "DG", "TG", "CL", "PC", "PE", "PS", "PG", "PI", "PA", "Cer", "CerP", "SM", "HexCer",
             "IPC",
@@ -2427,35 +2350,35 @@ mod tests {
         // "PC 19:2" is ambiguous: total composition without explicit chains.
         // PC requires 2 chains but gets only 1 shorthand token "19:2",
         // so this should return None instead of creating a fake 19-carbon chain.
-        assert!(lipid_name_to_smiles("PC 19:2").is_none());
+        assert!(generate_smiles("PC 19:2").is_none());
     }
 
     #[test]
     fn shorthand_tg_54_3_rejected() {
         // "TG 54:3" is ambiguous: total composition for 3 chains.
         // Should return None.
-        assert!(lipid_name_to_smiles("TG 54:3").is_none());
+        assert!(generate_smiles("TG 54:3").is_none());
     }
 
     #[test]
     fn shorthand_dg_36_2_rejected() {
         // "DG 36:2" is ambiguous: total composition for 2 chains.
         // Should return None.
-        assert!(lipid_name_to_smiles("DG 36:2").is_none());
+        assert!(generate_smiles("DG 36:2").is_none());
     }
 
     #[test]
     fn explicit_pc_16_0_slash_18_1_accepted() {
         // "PC 16:0/18:1" has explicit chains with "/" separator, so it's valid.
-        let s = lipid_name_to_smiles("PC 16:0/18:1").expect("explicit chains should work");
+        let s = generate_smiles("PC 16:0/18:1").expect("explicit chains should work");
         assert_balanced(&s);
-        assert!(!s.contains("f:"), "resolved regiochemistry needs no f:");
+        assert!(!s.contains("swappable("));
     }
 
     #[test]
     fn explicit_pc_16_1_underscore_18_1_accepted() {
         // "PC 16:1_18:1" has explicit chains with "_" separator, so it's valid.
-        let s = lipid_name_to_smiles("PC 16:1_18:1").expect("explicit chains should work");
+        let s = generate_smiles("PC 16:1_18:1").expect("explicit chains should work");
         assert_balanced(&s);
         // Both chains are unlocalized, so this takes the Sg:-keeping path.
         assert!(s.contains("Sg:n:"), "{s}");
@@ -2464,14 +2387,14 @@ mod tests {
     #[test]
     fn single_chain_fa_18_1_accepted() {
         // FA and other single-chain lipids should work with shorthand like "FA 18:1".
-        let s = lipid_name_to_smiles("FA 18:1").expect("single-chain shorthand should work");
+        let s = generate_smiles("FA 18:1").expect("single-chain shorthand should work");
         assert_balanced(&s);
     }
 
     #[test]
     fn fa_with_hydroxyl_at_known_position() {
         // FA with hydroxyl at position 15
-        let s = lipid_name_to_smiles("FA 20:4(5,8,11,14);15OH").expect("FA with OH should work");
+        let s = generate_smiles("FA 20:4(5,8,11,14);15OH").expect("FA with OH should work");
         assert_balanced(&s);
         assert!(s.contains("C(O)"), "hydroxyl group should be present");
         // Everything about this chain is positioned, so it comes out as
@@ -2483,8 +2406,7 @@ mod tests {
     #[test]
     fn fa_with_hydroxyl_at_multiple_positions() {
         // FA with hydroxyls at positions 3 and 5
-        let s =
-            lipid_name_to_smiles("FA 18:1(9);3OH,5OH").expect("FA with multiple OH should work");
+        let s = generate_smiles("FA 18:1(9);3OH,5OH").expect("FA with multiple OH should work");
         assert_balanced(&s);
         let oh_count = s.matches("C(O)").count();
         assert_eq!(oh_count, 2, "should have 2 hydroxyl groups");
@@ -2493,7 +2415,7 @@ mod tests {
     #[test]
     fn fa_with_ketone_at_known_position() {
         // FA with ketone (oxo) at position 5
-        let s = lipid_name_to_smiles("FA 18:1(9);5oxo").expect("FA with oxo should work");
+        let s = generate_smiles("FA 18:1(9);5oxo").expect("FA with oxo should work");
         assert_balanced(&s);
         assert!(s.contains("C(=O)"), "ketone group should be present");
     }
@@ -2501,8 +2423,7 @@ mod tests {
     #[test]
     fn fa_with_hydroxyls_and_ketones() {
         // FA with both hydroxyls and ketones
-        let s =
-            lipid_name_to_smiles("FA 20:2(5,11);3OH;8oxo").expect("FA with OH and oxo should work");
+        let s = generate_smiles("FA 20:2(5,11);3OH;8oxo").expect("FA with OH and oxo should work");
         assert_balanced(&s);
         assert!(s.contains("C(O)"), "hydroxyl should be present");
         assert!(s.contains("C(=O)"), "ketone should be present");
@@ -2511,7 +2432,7 @@ mod tests {
     #[test]
     fn tg_with_modifications_on_one_chain() {
         // TG with one chain having modifications
-        let s = lipid_name_to_smiles("TG 18:0/18:1(9);3OH/18:0")
+        let s = generate_smiles("TG 18:0/18:1(9);3OH/18:0")
             .expect("TG with chain modification should work");
         assert_balanced(&s);
         assert!(s.contains("C(O)"), "chain with hydroxyl should be present");
@@ -2520,8 +2441,8 @@ mod tests {
     #[test]
     fn dg_with_hydroxyl_unresolved_regiochemistry() {
         // DG with hydroxyl on unresolved chains
-        let s = lipid_name_to_smiles("DG 18:1(9);3OH_18:0")
-            .expect("DG with OH and unresolved should work");
+        let s =
+            generate_smiles("DG 18:1(9);3OH_18:0").expect("DG with OH and unresolved should work");
         assert_balanced(&s);
         assert!(
             s.contains("swappable(sn1,sn2)"),
@@ -2532,14 +2453,13 @@ mod tests {
 
     #[test]
     fn generic_oxygen_without_position_returns_none() {
-        // Generic oxygen (;O or ;O2) without specific position breakdown
-        // should return None as per current design (ambiguity without fallback)
+        // A generic oxygen count has no structural group or candidate site.
         assert!(
-            lipid_name_to_smiles("FA 18:1(9);O").is_none(),
+            generate_smiles("FA 18:1(9);O").is_none(),
             "generic O without position should be rejected"
         );
         assert!(
-            lipid_name_to_smiles("FA 18:1(9);O2").is_none(),
+            generate_smiles("FA 18:1(9);O2").is_none(),
             "generic O2 without position should be rejected"
         );
     }
@@ -2547,8 +2467,8 @@ mod tests {
     #[test]
     fn hydroxyl_with_unlocalized_double_bond() {
         // FA with localized hydroxyl but unlocalized double bond
-        let s = lipid_name_to_smiles("FA 18:2;5OH")
-            .expect("unlocalized DB with localized OH should work");
+        let s =
+            generate_smiles("FA 18:2;5OH").expect("unlocalized DB with localized OH should work");
         assert_balanced(&s);
         assert!(s.contains("C(O)"), "hydroxyl should be present");
         assert!(
@@ -2576,7 +2496,7 @@ mod tests {
     fn every_table_1a_substituent_reaches_the_smiles() {
         for (abbr, branch) in SUBSTITUENTS {
             let name = format!("FA 18:0;5{abbr}");
-            let s = lipid_name_to_smiles(&name)
+            let s = generate_smiles(&name)
                 .unwrap_or_else(|| panic!("{name} should resolve: Table 1A group {abbr}"));
             assert_balanced(&s);
             assert!(
@@ -2595,17 +2515,13 @@ mod tests {
     fn underspecified_table_1a_groups_are_refused() {
         for abbr in UNRENDERABLE {
             let name = format!("FA 18:0;5{abbr}");
-            assert_eq!(
-                lipid_name_to_smiles(&name),
-                None,
-                "{name} should be refused"
-            );
+            assert_eq!(generate_smiles(&name), None, "{name} should be refused");
         }
         // C1 of an acyl chain is the ester carbonyl; `1OMe` is the methyl
         // ester, a different linkage rather than a substituted carbon.
-        assert_eq!(lipid_name_to_smiles("FA 18:0;1OMe"), None);
+        assert_eq!(generate_smiles("FA 18:0;1OMe"), None);
         // An unknown abbreviation is a typo, not a licence to ignore it.
-        assert_eq!(lipid_name_to_smiles("FA 18:0;5Zz"), None);
+        assert_eq!(generate_smiles("FA 18:0;5Zz"), None);
     }
 
     /// Table 1B rings, in the paper's `[start-end cyX:DBE(pos)]` spelling,
@@ -2613,7 +2529,7 @@ mod tests {
     #[test]
     fn table_1b_rings_close_across_the_named_carbons() {
         // Lactobacillic acid: cyclopropane spanning C11-C13.
-        let lacto = lipid_name_to_smiles("FA 19:0;[11-13cy3:0]").expect("should resolve");
+        let lacto = generate_smiles("FA 19:0;[11-13cy3:0]").expect("should resolve");
         assert_balanced(&lacto);
         assert_eq!(
             lacto.matches("%10").count(),
@@ -2624,11 +2540,11 @@ mod tests {
 
         // Sterculic acid: the ring carries a double bond of its own, which
         // is additional to the chain's `19:0` count.
-        let sterculic = lipid_name_to_smiles("FA 19:0;[9-11cy3:1(9)]").expect("should resolve");
+        let sterculic = generate_smiles("FA 19:0;[9-11cy3:1(9)]").expect("should resolve");
         assert!(sterculic.contains("C%10=CC%10"), "{sterculic}");
 
         // Gorlic acid: a cyclopentene ring plus a chain double bond.
-        let gorlic = lipid_name_to_smiles("FA 18:1(6Z);[14-18cy5:1(15)]").expect("should resolve");
+        let gorlic = generate_smiles("FA 18:1(6Z);[14-18cy5:1(15)]").expect("should resolve");
         assert!(gorlic.contains("/C=C\\"), "chain DB kept: {gorlic}");
         assert!(gorlic.contains("C%10C=CCC%10"), "{gorlic}");
 
@@ -2642,22 +2558,18 @@ mod tests {
 
         // A span that disagrees with the ring size, or runs off the chain,
         // is malformed rather than something to round off.
-        assert_eq!(lipid_name_to_smiles("FA 19:0;[11-13cy5:0]"), None);
-        assert_eq!(lipid_name_to_smiles("FA 19:0;[18-20cy3:0]"), None);
+        assert_eq!(generate_smiles("FA 19:0;[11-13cy5:0]"), None);
+        assert_eq!(generate_smiles("FA 19:0;[18-20cy3:0]"), None);
     }
 
     /// An epoxide is a ring too: two adjacent carbons bridged by an oxygen,
-    /// closed by the same `%nn` label. `Ep` and the older `ep(pos)` spelling
-    /// have to agree.
+    /// closed by the same `%nn` label. Both accepted epoxide spellings agree.
     #[test]
     fn epoxide_renders_as_a_three_membered_ring() {
-        let s = lipid_name_to_smiles("FA 18:0;5Ep").expect("should resolve");
+        let s = generate_smiles("FA 18:0;5Ep").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("C%10OC%10"), "{s}");
-        assert_eq!(
-            lipid_name_to_smiles("FA 18:0;ep(5)").as_deref(),
-            Some(&s[..])
-        );
+        assert_eq!(generate_smiles("FA 18:0;ep(5)").as_deref(), Some(&s[..]));
         assert_chain_map_sane("FA 18:0;5Ep", &[(1, 18)]);
     }
 
@@ -2666,14 +2578,14 @@ mod tests {
     /// template already uses (the sterol nucleus alone spends 1, 2 and 3).
     #[test]
     fn ring_labels_stay_distinct_across_chains_and_templates() {
-        let tg = lipid_name_to_smiles("TG 18:0;5Ep/18:0;9Ep/18:0").expect("should resolve");
+        let tg = generate_smiles("TG 18:0;5Ep/18:0;9Ep/18:0").expect("should resolve");
         assert_balanced(&tg);
         assert_eq!(tg.matches("%10").count(), 2, "{tg}");
         assert_eq!(tg.matches("%11").count(), 2, "{tg}");
         assert_chain_map_sane("TG 18:0;5Ep/18:0;9Ep/18:0", &[(1, 18), (2, 18), (3, 18)]);
 
         // The sterol template's own 1/2/3 are untouched by the chain's %10.
-        let ce = lipid_name_to_smiles("CE 18:0;9Ep").expect("should resolve");
+        let ce = generate_smiles("CE 18:0;9Ep").expect("should resolve");
         assert_balanced(&ce);
         assert!(ce.contains("C12(") && ce.contains("C%10OC%10"), "{ce}");
     }
@@ -2682,7 +2594,7 @@ mod tests {
     /// ring's brackets, and a group outside it all on one chain.
     #[test]
     fn ring_brackets_may_carry_their_own_functional_groups() {
-        let s = lipid_name_to_smiles("FA 20:2(5,8);[11-15cy5;13OH];18OH").expect("should resolve");
+        let s = generate_smiles("FA 20:2(5,8);[11-15cy5;13OH];18OH").expect("should resolve");
         assert_balanced(&s);
         assert_eq!(s.matches("C(O)").count(), 2, "both hydroxyls: {s}");
         assert_eq!(s.matches("%10").count(), 2, "{s}");
@@ -2694,7 +2606,7 @@ mod tests {
     /// under-report the group count.
     #[test]
     fn parenthesized_multiplicity_gives_one_m_block_per_group() {
-        let s = lipid_name_to_smiles("FA 20:3(5,8,11);(OH)2").expect("should resolve");
+        let s = generate_smiles("FA 20:3(5,8,11);(OH)2").expect("should resolve");
         assert_eq!(s.matches("m:").count(), 2, "{s}");
         assert_eq!(
             s.split(" |").next().unwrap().matches(".*O").count(),
@@ -2708,11 +2620,11 @@ mod tests {
     #[test]
     fn positions_precede_abbreviations_and_stack() {
         // Phytanic acid: four methyl branches on a 16-carbon chain.
-        let phytanic = lipid_name_to_smiles("FA 16:0;3Me,7Me,11Me,15Me").expect("should resolve");
+        let phytanic = generate_smiles("FA 16:0;3Me,7Me,11Me,15Me").expect("should resolve");
         assert_eq!(phytanic.matches("C(C)").count(), 4, "{phytanic}");
         assert_chain_map_sane("FA 16:0;3Me,7Me,11Me,15Me", &[(1, 16)]);
 
-        let mixed = lipid_name_to_smiles("FA 20:3(5Z,13E);11OH,15OH;9oxo").expect("should resolve");
+        let mixed = generate_smiles("FA 20:3(5Z,13E);11OH,15OH;9oxo").expect("should resolve");
         assert_eq!(mixed.matches("C(O)").count(), 2, "{mixed}");
         assert_eq!(
             mixed.matches("C(=O)").count(),
@@ -2721,26 +2633,17 @@ mod tests {
         );
     }
 
-    // Tests for CDK-style lipid_name_to_smiles()
     #[test]
-    fn cdk_simple_fa() {
-        // Simple fatty acid should work
-        let s = lipid_name_to_smiles("FA 18:1(9)").expect("should resolve");
-        eprintln!("Generated SMILES: {}", s);
+    fn simple_fa() {
+        let s = generate_smiles("FA 18:1(9)").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("C=C"), "double bond should be present");
     }
 
-    // DG and PC support coming soon - currently FA only
-    // TODO: Implement DG/PC multi-chain support in build_cdk_chain_smiles
-    //   - Handle multiple chains with wildcard (*) attachment points
-    //   - Generate f: blocks for component grouping
-    //   - Support Sg labels for sn-position ambiguity
-
     #[test]
     fn expand_cxsmiles_resolves_to_full_chain_length() {
         // FA 18:2: 18 total carbons, 2 unlocalized double bonds.
-        let cxsmiles = lipid_name_to_smiles("FA 18:2").expect("should resolve");
+        let cxsmiles = generate_smiles("FA 18:2").expect("should resolve");
         let expanded = expand_cxsmiles_for_depiction(&cxsmiles);
 
         assert!(
@@ -2775,15 +2678,14 @@ mod tests {
     #[test]
     fn expand_cxsmiles_passthrough_without_sg_blocks() {
         // Plain SMILES with no CXSMILES suffix is returned unchanged.
-        let s = lipid_name_to_smiles("FA 16:0").expect("should resolve");
+        let s = generate_smiles("FA 16:0").expect("should resolve");
         assert_eq!(expand_cxsmiles_for_depiction(&s), s);
     }
 
     #[test]
-    fn cdk_fa_unlocalized_db() {
+    fn fa_unlocalized_db_has_cx_fields() {
         // FA with unlocalized double bonds
-        let s = lipid_name_to_smiles("FA 18:2").expect("should resolve");
-        eprintln!("CDK FA 18:2: {}", s);
+        let s = generate_smiles("FA 18:2").expect("should resolve");
         let smiles_part = s.split(' ').next().unwrap_or(&s);
         assert_balanced(smiles_part);
 
@@ -2828,8 +2730,8 @@ mod tests {
     }
 
     #[test]
-    fn cdk_single_unlocalized_db_has_terminal_sg_marker() {
-        let s = lipid_name_to_smiles("FA 18:1").expect("should resolve");
+    fn single_unlocalized_db_has_terminal_sg_marker() {
+        let s = generate_smiles("FA 18:1").expect("should resolve");
         let smiles_part = s.split(' ').next().unwrap_or(&s);
 
         assert!(smiles_part.ends_with("C=CC"));
@@ -2846,75 +2748,27 @@ mod tests {
 
     #[test]
     fn unknown_geometry_is_just_a_plain_double_bond() {
-        let unspecified = lipid_name_to_smiles("FA 18:1(9);OH").expect("should resolve");
+        let unspecified = generate_smiles("FA 18:1(9);OH").expect("should resolve");
         assert!(unspecified.contains("|m:"));
         assert!(unspecified.contains("C=C"), "{unspecified}");
         assert!(!unspecified.contains('/') && !unspecified.contains('\\'));
 
-        let explicit = lipid_name_to_smiles("FA 18:1(9Z);OH").expect("should resolve");
+        let explicit = generate_smiles("FA 18:1(9Z);OH").expect("should resolve");
         assert!(explicit.contains("/C=C\\"));
     }
 
     #[test]
-    fn test_fa_16_1_known_db() {
-        // Test cases with variable DBs and known DBs
-        let test_cases = vec![
-            ("FA 18:2", "Variable DBs (2)"),
-            ("FA 16:4", "Variable DBs (4)"),
-            ("FA 20:3", "Variable DBs (3)"),
-            ("FA 16:1(9)", "Known DB at 9"),
-            ("FA 16:1(9);oxo;OH", "Known DB 9, unknown oxo and OH"),
-            ("FA 18:1(9);OH", "Known DB 9, unknown OH"),
-            ("FA 18:1(9);oxo", "Known DB 9, unknown oxo"),
-            (
-                "FA 18:1(9);oxo;OH;COOH",
-                "Known DB 9, unknown oxo, OH, COOH",
-            ),
-            (
-                "FA 18:4;oxo;hydroxy",
-                "Variable DBs (4) + unknown oxo and hydroxy",
-            ),
-            ("FA 18:4(5,8,11,14);3oxo;16OH", "Known DBs + known mods"),
-        ];
-        for (name, desc) in test_cases {
-            match lipid_name_to_smiles(name) {
-                Some(s) => eprintln!("{} ({}): {}", name, desc, s),
-                None => eprintln!("{} ({}): None", name, desc),
-            }
-        }
-    }
-
-    // FA with known modifications - m: blocks coming soon
-    // TODO: Implement full m: block generation for modification placement options
-    //   - Map atom indices to possible positions
-    //   - Support multiple modification fragments
-    //   - Combine with f: blocks for multi-chain cases
-
-    // PC complex cases - multi-chain support coming soon
-    // TODO: Implement PC/DG with unknown sn-positions + variable DBs + variable modifications
-
-    #[test]
     fn pc_complex_ambiguities() {
         let test_name = "PC 16:2_18:1(7);5oxo";
-        let s = lipid_name_to_smiles(test_name).expect("should parse");
-
-        eprintln!("\n=== CXSMILES ===");
-        eprintln!("Input:  {}", test_name);
-        eprintln!("Output: {}", s);
-        eprintln!();
+        let s = generate_smiles(test_name).expect("should parse");
 
         assert_balanced(&s);
-
-        if s.contains("C(=O)C") || s.contains("(=O)C") {
-            eprintln!("✓ Has oxo/ketone group from chain 2");
-        }
+        assert!(s.contains("C(=O)C") || s.contains("(=O)C"), "{s}");
         assert!(
             s.contains("Sg:"),
             "should have Sg: for chain 1's unlocalized double bond"
         );
-        // Chain 1's Sg: run keeps it in the main SMILES, which rules out the
-        // RG: form for this molecule - the two ambiguities cannot coexist.
-        assert!(!s.contains("RG:"), "{s}");
+        assert!(s.contains("swappable(sn1,sn2)"), "{s}");
     }
 
     /// An unlocalized modification is a CXSMILES position-variation bond:
@@ -2924,7 +2778,7 @@ mod tests {
     /// smuggle in a carbon the chain doesn't have.
     #[test]
     fn unlocalized_modification_lists_every_chain_carbon() {
-        let s = lipid_name_to_smiles("FA 18:1;OH").expect("should resolve");
+        let s = generate_smiles("FA 18:1;OH").expect("should resolve");
         // OC(=O)CC=CC.*O -> chain carbons are atoms 1..=6, C1 (atom 1) is
         // the carboxyl, and atom 7 is the `*` the hydroxyl hangs off.
         assert!(s.contains("m:7:3.4.5.6"), "{s}");
@@ -2932,9 +2786,9 @@ mod tests {
 
         // A ketone converts a carbon rather than adding one; an extra
         // carboxyl brings its own.
-        let oxo = lipid_name_to_smiles("FA 18:0;oxo").expect("should resolve");
+        let oxo = generate_smiles("FA 18:0;oxo").expect("should resolve");
         assert!(oxo.split(" |").next().unwrap().ends_with(".*=O"), "{oxo}");
-        let cooh = lipid_name_to_smiles("FA 18:0;COOH").expect("should resolve");
+        let cooh = generate_smiles("FA 18:0;COOH").expect("should resolve");
         assert!(
             cooh.split(" |").next().unwrap().ends_with(".*C(=O)O"),
             "{cooh}"
@@ -2942,13 +2796,7 @@ mod tests {
     }
 
     /// The position-variation stub survives into the depiction form
-    /// unchanged, and adds no carbon the molecule doesn't have.
-    ///
-    /// This replaces an older table of substitutions (`.[OH]` -> `.CO` and
-    /// friends) that existed to make an inert `m:` block at least *look*
-    /// like a modification. `*O` needs no such trade: it is both the form
-    /// the block requires and a legible `R-OH` stub, so the depicted
-    /// formula finally matches the stored one.
+    /// unchanged and adds no carbon the molecule does not have.
     #[test]
     fn depiction_keeps_the_position_variation_stub() {
         for (name, expected) in [
@@ -2956,12 +2804,12 @@ mod tests {
             ("FA 18:0;oxo", "OC(=O)CCCCCCCCCCCCCCCCC.*=O"),
             ("FA 18:0;COOH", "OC(=O)CCCCCCCCCCCCCCCCC.*C(=O)O"),
         ] {
-            let depicted = expand_cxsmiles_for_depiction(&lipid_name_to_smiles(name).unwrap());
+            let depicted = expand_cxsmiles_for_depiction(&generate_smiles(name).unwrap());
             assert_eq!(depicted, expected, "{name}");
         }
         // A charged bracket atom inside a real structure is not a
         // position-variation placeholder and must survive untouched.
-        let pc = expand_cxsmiles_for_depiction(&lipid_name_to_smiles("PC 16:0/18:1(9)").unwrap());
+        let pc = expand_cxsmiles_for_depiction(&generate_smiles("PC 16:0/18:1(9)").unwrap());
         assert!(pc.contains("[O-]") && pc.contains("[N+]"), "{pc}");
 
         // The stub sits between the chain and whatever follows, so every
@@ -2976,18 +2824,16 @@ mod tests {
     /// displacing them.
     #[test]
     fn swappable_names_keep_every_carbon() {
-        let s = lipid_name_to_smiles("DG 18:1(9);5OH_18:0").expect("should resolve");
+        let s = generate_smiles("DG 18:1(9);5OH_18:0").expect("should resolve");
         assert_balanced(&s);
         assert!(s.ends_with("swappable(sn1,sn2)"), "{s}");
         assert_chain_map_sane("DG 18:1(9);5OH_18:0", &[(1, 18), (2, 18)]);
     }
 
-    /// The whole point of moving off `RG:`: a chain can now be unlocalized
-    /// *and* swappable. Under the R-group encoding these two were mutually
-    /// exclusive and the sn ambiguity was silently dropped.
+    /// A chain can be both unlocalized and swappable.
     #[test]
     fn sg_and_swappable_coexist() {
-        let s = lipid_name_to_smiles("PC 16:0_18:1").expect("should resolve");
+        let s = generate_smiles("PC 16:0_18:1").expect("should resolve");
         assert_balanced(&s);
         assert!(s.contains("Sg:n:"), "unlocalized double bond kept: {s}");
         assert!(
@@ -2996,32 +2842,27 @@ mod tests {
         );
 
         // And the same for an unlocalized modification.
-        let m = lipid_name_to_smiles("PC 16:0_18:1(9);OH").expect("should resolve");
+        let m = generate_smiles("PC 16:0_18:1(9);OH").expect("should resolve");
         assert!(m.contains("m:"), "{m}");
         assert!(m.contains("swappable(sn1,sn2)"), "{m}");
     }
 
-    /// The Sg:-keeping fallback must not lose carbons either: a chain
-    /// declared 18:1 still has to expand to 18 literal carbons, whichever
-    /// path built it.
+    /// Every Sg-bearing chain expands to its declared carbon count.
     #[test]
-    fn sg_fallback_chains_keep_every_carbon() {
+    fn sg_chains_keep_every_carbon() {
         assert_chain_map_sane("DG 18:1(9);5OH_18:1;OH", &[(1, 18), (2, 18)]);
     }
 
     #[test]
     fn expand_cxsmiles_handles_multi_chain_offset_and_renaming() {
         // Two chains each with their own unlocalized double bonds, joined
-        // with unresolved regiochemistry: exercises CdkBuilder's atom
+        // with unresolved regiochemistry: exercises CxBuilder's atom
         // offsetting and variable renaming across multiple fragments, and
         // expand_cxsmiles_for_depiction's positional (not name-based)
         // matching of Sg positions back to their constraint equation.
-        let s = lipid_name_to_smiles("PC 16:2_18:1").expect("should resolve");
+        let s = generate_smiles("PC 16:2_18:1").expect("should resolve");
         assert_balanced(&s);
-        // Both chains need Sg:, so neither can move into an RG: definition
-        // and the sn ambiguity goes unexpressed — the chains are written
-        // into the backbone in name order instead.
-        assert!(!s.contains("RG:") && !s.contains("f:"), "{s}");
+        assert!(s.contains("swappable(sn1,sn2)"), "{s}");
         assert_eq!(
             s.matches("Sg:n:").count(),
             5,
@@ -3055,123 +2896,32 @@ mod tests {
         // PC 18:4(5,8,11,14);3oxo;16OH_18:2;oxo;OH
         // Chain 1: fully known (variable DBs + known modifications)
         // Chain 2: variable DBs + variable modifications
-        let s = lipid_name_to_smiles("PC 18:4(5,8,11,14);3oxo;16OH_18:2;oxo;OH")
+        let s = generate_smiles("PC 18:4(5,8,11,14);3oxo;16OH_18:2;oxo;OH")
             .expect("should resolve PC with variable content");
-        eprintln!("PC multichain CXSMILES: {}", s);
-
-        // Chain 2's unlocalized double bonds and modifications keep it in
-        // the main SMILES, so this takes the Sg:/m: path, not the RG: one.
         let blocks = s.split(" |").nth(1).unwrap_or("");
-        eprintln!("CXSMILES suffix: {}", blocks);
         assert!(blocks.contains("Sg:n:"), "chain 2 has unlocalized DBs: {s}");
         assert!(
             blocks.contains("m:"),
             "chain 2 has unlocalized oxygens: {s}"
         );
-        assert!(!blocks.contains("RG:") && !blocks.contains("f:"), "{s}");
+        assert!(s.contains("swappable(sn1,sn2)"), "{s}");
         // The `*` present is the position-variation stub, not an attachment
         // point for a chain.
         assert!(s.contains(".*O"), "{s}");
     }
 
     #[test]
-    fn pc_multichain_known_sn() {
-        // PC with known sn-positions - fallback to traditional approach
-        // PC 18:1(9)/18:2 should not generate CDK CXSMILES (no variable content)
-        let _s = lipid_name_to_smiles("PC 18:1(9)/18:2");
-        // Should return None since both DBs are known (18:2 has variable positions)
-        // Wait, 18:2 has variable positions, so it should work!
-        // Let me use a fully known case
-        match lipid_name_to_smiles("PC 18:0/18:0") {
-            None => {
-                // Fallback to traditional - expected since no variable content
-                eprintln!("PC 18:0/18:0 correctly falls back to None (no variable content)");
-            }
-            Some(s) => {
-                eprintln!("PC 18:0/18:0 unexpectedly generated CDK: {}", s);
-            }
-        }
-    }
-
-    #[test]
-    fn cdk_cxsmiles_extended_classes() {
-        // Test that extended lipid classes generate CXSMILES when they have variable content
-        let test_cases = vec![
-            ("PE 18:2_18:1(9)", "PE with variable DBs"),
-            ("PS 18:2_18:1(9)", "PS with variable DBs"),
-            ("PG 18:2_18:1(9)", "PG with variable DBs"),
-            ("PA 18:2_18:1(9)", "PA with variable DBs"),
-            ("LPE 18:2", "LPE with variable DBs"),
-            ("LPS 18:2", "LPS with variable DBs"),
-        ];
-
-        for (input, description) in test_cases {
-            match lipid_name_to_smiles(input) {
-                Some(cxsmiles) => {
-                    eprintln!("✓ {}: {}", description, input);
-                    eprintln!("  Generated CXSMILES: {}", cxsmiles);
-                }
-                None => {
-                    eprintln!(
-                        "✓ {}: {} (falls back - no variable content)",
-                        description, input
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn cdk_cxsmiles_validation() {
-        // Validate that generated CXSMILES conform to CDK specifications
-        let test_cases = vec![
-            ("FA 18:2", "Variable DBs should generate Sg blocks"),
-            ("FA 18:4(5,8,11,14);3oxo;16OH", "Known DBs with known mods"),
-            (
-                "PC 18:4(5,8,11,14);3oxo;16OH_18:2;oxo;OH",
-                "Multi-chain with variable content",
-            ),
-        ];
-
-        for (input, description) in test_cases {
-            if let Some(cxsmiles) = lipid_name_to_smiles(input) {
-                eprintln!("\n✓ {}: {}", description, input);
-                eprintln!("  CXSMILES: {}", cxsmiles);
-
-                // Split SMILES and CXSMILES blocks
-                let parts: Vec<&str> = cxsmiles.split(" |").collect();
-                if parts.len() >= 2 {
-                    let cxsmiles_blocks = parts[1];
-                    eprintln!("  Blocks: {}", cxsmiles_blocks);
-
-                    // Validate Sg blocks (format: Sg:n:position:variable:ht)
-                    if cxsmiles_blocks.contains("Sg:") {
-                        let sg_count = cxsmiles_blocks.matches("Sg:n:").count();
-                        eprintln!("  ✓ {} Sg blocks found (Sg:n:pos:var:ht format)", sg_count);
-                    }
-
-                    // Validate m: blocks (format: m:atom_idx:pos.pos)
-                    if cxsmiles_blocks.contains("m:") {
-                        let m_count = cxsmiles_blocks.matches("m:").count();
-                        eprintln!("  ✓ {} m: blocks found (m:atom:pos.pos format)", m_count);
-                    }
-
-                    // Validate f: block (format: f:0.1,0.2,...)
-                    if cxsmiles_blocks.contains("f:") {
-                        eprintln!("  ✓ f: block present (component grouping)");
-                    }
-
-                    // Validate constraint (format: var+var+...=number)
-                    if let Some(pipe_pos) = cxsmiles_blocks.rfind('|') {
-                        let constraint = &cxsmiles_blocks[pipe_pos + 1..];
-                        if constraint.contains('=') && constraint.contains('+') {
-                            eprintln!("  ✓ Constraint present: {}", constraint);
-                        }
-                    }
-                } else {
-                    eprintln!("  SMILES only (no CXSMILES blocks): {}", cxsmiles);
-                }
-            }
+    fn extended_classes_support_variable_content() {
+        for name in [
+            "PE 18:2_18:1(9)",
+            "PS 18:2_18:1(9)",
+            "PG 18:2_18:1(9)",
+            "PA 18:2_18:1(9)",
+            "LPE 18:2",
+            "LPS 18:2",
+        ] {
+            let cxsmiles = generate_smiles(name).unwrap_or_else(|| panic!("{name} should resolve"));
+            assert!(cxsmiles.contains("Sg:"), "{name}: {cxsmiles}");
         }
     }
 }

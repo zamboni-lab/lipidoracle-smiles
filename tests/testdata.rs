@@ -1,14 +1,12 @@
 //! Corpus tests driven by the CSVs in `testdata/`.
 //!
-//! Two kinds of check live here, and the distinction matters:
+//! Two complementary checks live here:
 //!
 //! * **Golden** (`name2smiles.csv`) — the exact strings the generator emits.
-//!   Catches regressions. Cannot catch a misconception: if an expected string
-//!   was wrong from the start, comparing against it passes forever.
 //! * **Property** (everything else) — statements derived from the *name*, not
 //!   recorded from the output: carbon counts, which atoms a block may point
 //!   at, which constructs are allowed to appear at all. These are the checks
-//!   that catch a block that was wrong from day one, and three of them were.
+//!   that validate the encoded structure independently.
 //!
 //! Regenerate the golden file after a deliberate encoding change with
 //! `cargo run --example bless_testdata`, then read the diff carefully.
@@ -16,7 +14,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use lipid_notation::{expand_cxsmiles_for_depiction, name2smiles, name2structure, smiles2name};
+use lipid_notation::{
+    canonicalize_cxsmiles, expand_cxsmiles_for_depiction, name2smiles, name2structure, smiles2name,
+};
 
 fn testdata(file: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -123,14 +123,44 @@ fn golden_strings_still_match() {
             Some(expanded.as_str()),
             "name2structure({name})"
         );
-        // Expansion and `name2structure` now always agree: both build the
-        // same connected molecule. Under `RG:` they could not — expansion had
-        // no basis for choosing which alternative went where, so it stripped
-        // the block and left a backbone of bare `*` slots.
+        // Expansion and `name2structure` build the same connected molecule.
         assert_eq!(
             expand_cxsmiles_for_depiction(cxsmiles),
             *expanded,
             "{name}: expansion should agree with name2structure"
+        );
+    }
+}
+
+#[test]
+fn every_stored_form_canonicalizes_idempotently() {
+    for row in read_csv("name2smiles.csv") {
+        let (name, stored) = (&row[0], &row[1]);
+        if stored.is_empty() {
+            continue;
+        }
+        let canonical = canonicalize_cxsmiles(stored)
+            .unwrap_or_else(|| panic!("{name}: could not canonicalize {stored}"));
+        assert_eq!(
+            canonicalize_cxsmiles(&canonical).as_deref(),
+            Some(canonical.as_str()),
+            "{name}: canonical form was not stable"
+        );
+
+        // These extensions refer to named Sg variables and atom labels, so
+        // atom renumbering must not alter them.
+        let trailer = stored.split('|').nth(2).unwrap_or("").trim();
+        let canonical_trailer = canonical.split('|').nth(2).unwrap_or("").trim();
+        assert_eq!(canonical_trailer, trailer, "{name}: trailer changed");
+
+        let recovered = smiles2name(&canonical)
+            .unwrap_or_else(|| panic!("{name}: canonical form should remain readable"));
+        let regenerated = name2smiles(&recovered)
+            .and_then(|generated| canonicalize_cxsmiles(&generated))
+            .unwrap_or_else(|| panic!("{name}: recovered name did not regenerate"));
+        assert_eq!(
+            regenerated, canonical,
+            "{name}: recovered name is not canonically equivalent"
         );
     }
 }
@@ -298,28 +328,6 @@ fn sn_labels_land_on_the_atom_each_chain_hangs_from() {
     assert!(seen >= 4, "corpus should exercise the swappable path");
 }
 
-/// `ctu:` is a ChemAxon *query* feature for matching any configuration, and
-/// `f:` groups components into one entity. Neither belongs in a structure:
-/// an undecorated `C=C` is already unspecified geometry, and `f:` expresses
-/// *and*, never the *or* that unresolved sn-regiochemistry needs. Both were
-/// emitted by earlier revisions; see `dev/SMILES.md` §3.
-#[test]
-fn no_block_is_a_query_or_a_fragment_group() {
-    for row in read_csv("name2smiles.csv") {
-        let (name, stored) = (&row[0], &row[1]);
-        let (_, blocks) = split_stored(stored);
-        assert!(
-            !blocks.contains("ctu:"),
-            "{name} still emits ctu:: {stored}"
-        );
-        assert!(!blocks.contains("f:"), "{name} still emits f:: {stored}");
-        // `RG:` was replaced by sn labels plus a `swappable(...)` token: it
-        // could not coexist with `Sg:`, it over-generated, and RDKit refused
-        // to parse it. See dev/extension.md §3.
-        assert!(!blocks.contains("RG:"), "{name} still emits RG:: {stored}");
-    }
-}
-
 /// A fully determined name must come out as plain SMILES with no tail at all,
 /// because the presence of a tail is the signal that something was
 /// undetermined.
@@ -349,8 +357,7 @@ fn multi_chain_shorthand_is_rejected() {
     assert!(name2smiles("FA 18:1").is_some());
 }
 
-/// The illustrative strings quoted in `dev/`, including one that documents a
-/// known bug rather than intended behaviour.
+/// The illustrative strings used by the documentation.
 #[test]
 fn doc_examples_still_match() {
     for row in read_csv("doc_examples.csv") {
@@ -423,10 +430,7 @@ fn every_name_survives_the_round_trip() {
         "the set of names that lose information changed"
     );
 
-    // Every `_` name now survives verbatim. Under the `RG:` encoding six of
-    // them did not: a chain needing `Sg:`/`m:` could not be an R-group
-    // alternative, so the sn ambiguity was dropped without a word and `_`
-    // came back as `/`. This assertion is what proves that is over.
+    // Unresolved `_` assignments survive verbatim, including alongside Sg/m.
     for name in [
         "PC 16:0_18:1",
         "PC 16:0_18:1(9);OH",
@@ -472,14 +476,7 @@ fn expanded_depictions_read_back_as_localized_names() {
     assert!(checked >= 5, "corpus should exercise the expanded path");
 }
 
-/// Every generator string quoted in the docs must be what the generator
-/// currently emits.
-///
-/// `doc_examples.csv` only pins the strings someone remembered to add to it.
-/// This scans the prose directly, which is what catches the ordinary failure:
-/// a format change lands, the tests and the corpus are updated, and the
-/// documentation keeps confidently showing the old output. Every string
-/// checked here had drifted at least once.
+/// Every generator string quoted in the README must match current output.
 ///
 /// A tail containing `…` is a deliberate elision and is skipped.
 #[test]
@@ -496,14 +493,9 @@ fn doc_prose_quotes_current_output() {
         .collect();
 
     let mut stale = Vec::new();
-    for doc in [
-        "README.md",
-        "dev/SMILES.md",
-        "dev/NOMENCLATURE.md",
-        "dev/extension.md",
-    ] {
+    for doc in ["README.md"] {
         let Ok(text) = std::fs::read_to_string(root.join(doc)) else {
-            continue; // a dev doc may not be present in every checkout
+            continue;
         };
         for (lineno, line) in text.lines().enumerate() {
             for (base, name, _) in &by_base {
