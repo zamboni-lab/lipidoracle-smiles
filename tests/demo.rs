@@ -13,7 +13,6 @@ const CDK_DEPICT_SVG: &str = "https://www.simolecule.com/cdkdepict/depict/bow/sv
 struct Example {
     group: &'static str,
     shorthand: &'static str,
-    note: &'static str,
     valid: bool,
 }
 
@@ -21,187 +20,161 @@ const EXAMPLES: &[Example] = &[
     Example {
         group: "Fully determined structures",
         shorthand: "FA 18:1(9Z)",
-        note: "Oleate-style monounsaturated fatty acid; Z geometry is explicit.",
         valid: true,
     },
     Example {
         group: "Fully determined structures",
         shorthand: "FA 20:4(5Z,8Z,12E,14Z);11OH",
-        note: "Four localized double bonds with mixed geometry and one localized hydroxyl.",
         valid: true,
     },
     Example {
         group: "Fully determined structures",
         shorthand: "PC 16:0/18:1(9Z)",
-        note: "Resolved sn assignment (`/`) and double-bond geometry.",
+        valid: true,
+    },
+    Example {
+        group: "Fully determined structures",
+        shorthand: "TG 16:0/18:0;5Me/18:1(9)",
         valid: true,
     },
     Example {
         group: "Fully determined structures",
         shorthand: "TG 16:0/18:1(9)/18:2(9,12)",
-        note: "Triacylglycerol with three explicit, ordered chains.",
         valid: true,
     },
     Example {
         group: "Unlocalized lipid features",
         shorthand: "FA 20:4",
-        note: "Four double bonds are declared but not localized; `Sg:` and `constrain(...)` retain that uncertainty.",
         valid: true,
     },
     Example {
         group: "Unlocalized lipid features",
         shorthand: "FA 20:4(5,8,12,14);OH",
-        note: "Localized double bonds with a hydroxyl whose position is represented by `m:`.",
         valid: true,
     },
     Example {
         group: "Unlocalized lipid features",
         shorthand: "PC 16:0_18:1",
-        note: "Known chains with unresolved sn assignment (`_`); atom labels and `swappable(...)` preserve it.",
         valid: true,
     },
     Example {
         group: "Unlocalized lipid features",
         shorthand: "PC O-16:1_18:2;OH",
-        note: "Ether-linked phosphatidylcholine combining `Sg:`, `m:`, and unresolved sn assignment.",
         valid: true,
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "FA 20:3(5,8,11);(OH)2",
-        note: "Three localized double bonds plus two independently unlocalized hydroxyl groups (`m:` twice).",
         valid: true,
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "FA 20:2(5,8);[11-15cy5;13OH];OH",
-        note: "A cyclopentane and localized in-ring hydroxyl combined with an unlocalized hydroxyl (`m:`).",
         valid: true,
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "PC 16:1_18:2;9Ep;OH",
-        note: "Unresolved sn assignment with `Sg:` regions on both chains, an epoxide, and a position-variable hydroxyl.",
         valid: true,
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "TG 18:1(9);5OH_18:2;9Ep_18:1",
-        note: "Three unresolved glycerolipid chains combining a localized hydroxyl, epoxide, and unlocalized double-bond regions.",
         valid: true,
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "Cer d18:1(4)/16:1;OH",
-        note: "Ceramide with a localized sphingoid double bond and an N-acyl chain carrying both `Sg:` and `m:` ambiguity.",
         valid: true,
     },
     Example {
         group: "Functional-group and ring notation",
         shorthand: "FA 16:0;3Me,7Me,11Me,15Me",
-        note: "Phytanic-acid style methyl branching using Table 1A substituents.",
         valid: true,
     },
     Example {
         group: "Functional-group and ring notation",
         shorthand: "FA 18:1(9);12NO2",
-        note: "Nitro substituent on a localized unsaturated chain.",
         valid: true,
     },
     Example {
         group: "Functional-group and ring notation",
         shorthand: "FA 18:0;9Ep",
-        note: "Epoxide ring across adjacent chain carbons.",
         valid: true,
     },
     Example {
         group: "Functional-group and ring notation",
         shorthand: "FA 19:0;[11-13cy3:0]",
-        note: "Cyclopropane ring notation (lactobacillic-acid style).",
         valid: true,
     },
     Example {
         group: "Functional-group and ring notation",
         shorthand: "FA 19:0;[9-11cy3:1(9)]",
-        note: "Cyclopropene ring with its own localized double bond (sterculic-acid style).",
         valid: true,
     },
     Example {
         group: "Functional-group and ring notation",
         shorthand: "FA 20:2(5,8);[11-15cy5;13OH];18OH",
-        note: "Cyclopentane with an in-ring hydroxyl plus a second chain hydroxyl.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "PC P-16:0/18:1(9)",
-        note: "Plasmalogen phosphatidylcholine with a vinyl-ether chain.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "CAR 18:1(9)",
-        note: "Acylcarnitine ester with a zwitterionic carnitine headgroup.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "NAE 20:4(5,8,11,14)",
-        note: "N-acylethanolamine.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "AMP-FA 20:4(5,8,11,14);15OH",
-        note: "AMP-linked fatty acid with a localized hydroxyl.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "Cer d18:1(4)/16:0",
-        note: "Ceramide with a dihydroxy sphingoid base and N-acyl chain.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "SM d18:1(4)/16:0",
-        note: "Sphingomyelin with phosphocholine headgroup.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "HexCer d18:1(4)/16:0",
-        note: "Hexosylceramide with the supported hexose template.",
         valid: true,
     },
     Example {
         group: "Headgroup diversity",
         shorthand: "S1P d18:1(4)",
-        note: "Sphingosine-1-phosphate.",
         valid: true,
     },
     Example {
         group: "Intentionally unsupported shorthand",
         shorthand: "PC 34:1",
-        note: "Species-level sum composition does not determine two explicit chains, so no structure is invented.",
         valid: false,
     },
     Example {
         group: "Intentionally unsupported shorthand",
         shorthand: "FA 18:1(9);O2",
-        note: "A generic oxygen count does not identify functional groups or candidate sites.",
         valid: false,
     },
     Example {
         group: "Intentionally unsupported shorthand",
         shorthand: "FA 18:0;1OMe",
-        note: "An acyl-chain C1 substituent changes the linkage rather than modifying a chain carbon.",
         valid: false,
     },
     Example {
         group: "Intentionally unsupported shorthand",
         shorthand: "Gal-Glc-Cer d18:1(4)/16:0",
-        note: "The carbohydrate sequence does not specify glycosidic linkage positions.",
         valid: false,
     },
 ];
@@ -272,6 +245,22 @@ fn validate(example: &Example, row: &ResultRow) {
     assert!(generated.starts_with(|c: char| c.is_ascii_alphabetic() || c == '[' || c == '*'));
 }
 
+/// Whether the name that came back is the name that went in.
+///
+/// A mismatch is not a failure. `name2smiles` is not injective, so more than
+/// one name can describe the same structure, and the reverse direction returns
+/// whichever spelling it derives from the molecule. What matters is that the
+/// recovered name regenerates the same structure — the round-trip test in
+/// `tests/testdata.rs` asserts exactly that, and this column shows where the
+/// spelling nevertheless differs.
+fn name_identity(shorthand: &str, recovered: Option<&str>) -> String {
+    match recovered {
+        Some(name) if name == shorthand => "yes".to_string(),
+        Some(name) => format!("as {}", html_code(Some(name))),
+        None => "&mdash;".to_string(),
+    }
+}
+
 fn html_code(value: Option<&str>) -> String {
     let value = value.unwrap_or("—");
     format!(
@@ -327,7 +316,7 @@ fn render_demo() -> String {
   code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; }
   .depiction { min-width: 660px; text-align: center; }
   .depiction img { width: 640px; max-width: none; height: auto; background: white; }
-  .notes { min-width: 260px; }
+  .identity { text-align: center; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -353,20 +342,20 @@ The full uncertainty encoding remains in the data columns.</p>
             out.push_str(&format!(
                 "<section><h2>{group}</h2><div class=\"table-wrap\"><table>\n"
             ));
-            out.push_str("<thead><tr><th>Test shorthand</th><th><code>name2smiles</code> output</th><th>Canonicalized CXSMILES</th><th><code>smiles2name</code> result</th><th>Direct CXSMILES depiction</th><th><code>smiles_for_depiction</code> depiction</th><th>Notes on correctness</th></tr></thead><tbody>\n");
+            out.push_str("<thead><tr><th>Test shorthand</th><th><code>name2smiles</code> output</th><th>Canonicalized CXSMILES</th><th><code>smiles2name</code> result</th><th>Name recovered?</th><th>Direct CXSMILES depiction</th><th><code>smiles_for_depiction</code> depiction</th></tr></thead><tbody>\n");
         }
 
         let row = evaluate(example);
         validate(example, &row);
         out.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"depiction\">{}</td><td class=\"depiction\">{}</td><td class=\"notes\">{}</td></tr>\n",
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"identity\">{}</td><td class=\"depiction\">{}</td><td class=\"depiction\">{}</td></tr>\n",
             html_code(Some(example.shorthand)),
             html_code(row.generated.as_deref()),
             html_code(row.canonical.as_deref()),
             html_code(row.recovered.as_deref()),
+            name_identity(example.shorthand, row.recovered.as_deref()),
             cdk_depiction(row.direct_depiction.as_deref()),
             cdk_depiction(row.prepared_depiction.as_deref()),
-            example.note,
         ));
     }
     out.push_str("</tbody></table></div></section>\n</body>\n</html>\n");
