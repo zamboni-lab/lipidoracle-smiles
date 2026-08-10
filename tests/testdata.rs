@@ -14,9 +14,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use lipid_notation::{
-    canonicalize_cxsmiles, name2smiles, name2structure, smiles2name, smiles_expand,
-};
+use lipid_notation::{canonicalize, name2smiles, name2structure, smiles2name, smiles_expand};
 
 fn testdata(file: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -139,10 +137,10 @@ fn every_stored_form_canonicalizes_idempotently() {
         if stored.is_empty() {
             continue;
         }
-        let canonical = canonicalize_cxsmiles(stored)
+        let canonical = canonicalize(stored)
             .unwrap_or_else(|| panic!("{name}: could not canonicalize {stored}"));
         assert_eq!(
-            canonicalize_cxsmiles(&canonical).as_deref(),
+            canonicalize(&canonical).as_deref(),
             Some(canonical.as_str()),
             "{name}: canonical form was not stable"
         );
@@ -156,7 +154,7 @@ fn every_stored_form_canonicalizes_idempotently() {
         let recovered = smiles2name(&canonical)
             .unwrap_or_else(|| panic!("{name}: canonical form should remain readable"));
         let regenerated = name2smiles(&recovered)
-            .and_then(|generated| canonicalize_cxsmiles(&generated))
+            .and_then(|generated| canonicalize(&generated))
             .unwrap_or_else(|| panic!("{name}: recovered name did not regenerate"));
         assert_eq!(
             regenerated, canonical,

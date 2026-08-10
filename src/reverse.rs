@@ -4,7 +4,7 @@
 //! graph-based headgroup and chain recognition. Every candidate name is
 //! regenerated and compared in canonical CXSMILES form before it is returned.
 
-use crate::canonicalize_cxsmiles;
+use crate::canonicalize;
 use crate::forward::{
     count_atoms, generate_smiles, trailer_equations, trailer_is_swappable, SUBSTITUENTS,
 };
@@ -547,11 +547,11 @@ fn join_slots(mut slots: Vec<(usize, Option<String>)>, sep: &str) -> Option<(usi
 /// when no name this generator accepts is canonically equivalent to it.
 pub(crate) fn parse_smiles(smi: &str) -> Option<String> {
     let smi = smi.trim();
-    let canonical = canonicalize_cxsmiles(smi)?;
+    let canonical = canonicalize(smi)?;
 
     let matches = |candidate: &String| {
         generate_smiles(candidate)
-            .and_then(|generated| canonicalize_cxsmiles(&generated))
+            .and_then(|generated| canonicalize(&generated))
             .as_deref()
             == Some(canonical.as_str())
     };
@@ -1570,11 +1570,11 @@ mod tests {
                 Some(recovered) => {
                     assert_ne!(recovered, name, "{tampered}: returned the untampered name");
                     let regenerated = generate_smiles(&recovered)
-                        .and_then(|s| canonicalize_cxsmiles(&s))
+                        .and_then(|s| canonicalize(&s))
                         .expect("recovered name should regenerate");
                     assert_eq!(
                         regenerated,
-                        canonicalize_cxsmiles(&tampered).unwrap(),
+                        canonicalize(&tampered).unwrap(),
                         "{tampered}: recovered name is not equivalent"
                     );
                 }

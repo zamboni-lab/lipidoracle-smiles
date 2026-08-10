@@ -22,7 +22,7 @@ use chematic_smiles::parse;
 /// original analytical record. Malformed or non-CXSMILES input is returned
 /// unchanged.
 pub fn smiles_for_depiction(smi: &str) -> String {
-    let Some(canonical) = crate::canonicalize_cxsmiles(smi) else {
+    let Some(canonical) = crate::canonicalize(smi) else {
         return smi.to_string();
     };
     let Some((base, rest)) = canonical.split_once(" |") else {
@@ -253,7 +253,7 @@ mod tests {
     #[test]
     fn finds_the_headgroup_site_after_canonicalization() {
         let cxsmiles = crate::name2smiles("FA 20:2(5,8);[11-15cy5;13OH];OH").unwrap();
-        let canonical = crate::canonicalize_cxsmiles(&cxsmiles).unwrap();
+        let canonical = crate::canonicalize(&cxsmiles).unwrap();
         let depiction = smiles_for_depiction(&canonical);
         assert!(depiction.contains("m:1:17.16|"), "{depiction}");
         assert_eq!(
@@ -268,7 +268,7 @@ mod tests {
         let cxsmiles = crate::name2smiles("PC 16:0_18:1").unwrap();
         assert_eq!(
             smiles_for_depiction(&cxsmiles),
-            crate::canonicalize_cxsmiles(&cxsmiles).unwrap()
+            crate::canonicalize(&cxsmiles).unwrap()
         );
     }
 }

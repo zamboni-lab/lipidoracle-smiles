@@ -23,7 +23,7 @@ use chematic_smiles::{canonical_atom_order, canonical_smiles, parse};
 /// Returns `None` if the base SMILES is invalid, the CX block is unterminated,
 /// or a recognized atom-indexed field is malformed or points outside the
 /// molecule.
-pub fn canonicalize_cxsmiles(smi: &str) -> Option<String> {
+pub fn canonicalize(smi: &str) -> Option<String> {
     let ParsedCx {
         base,
         fields,
@@ -312,25 +312,25 @@ mod tests {
 
     #[test]
     fn canonicalizes_plain_smiles() {
-        assert_eq!(canonicalize_cxsmiles("OCC"), canonicalize_cxsmiles("CCO"));
+        assert_eq!(canonicalize("OCC"), canonicalize("CCO"));
     }
 
     #[test]
     fn equivalent_atom_orders_produce_the_same_cxsmiles() {
         assert_eq!(
-            canonicalize_cxsmiles("OCC |Sg:n:0:a:ht,$oxygen;;tail$| constrain(a=1)"),
-            canonicalize_cxsmiles("CCO |Sg:n:2:a:ht,$tail;;oxygen$| constrain(a=1)")
+            canonicalize("OCC |Sg:n:0:a:ht,$oxygen;;tail$| constrain(a=1)"),
+            canonicalize("CCO |Sg:n:2:a:ht,$tail;;oxygen$| constrain(a=1)")
         );
         assert_eq!(
-            canonicalize_cxsmiles("CC.*O |m:2:0.1|"),
-            canonicalize_cxsmiles("O*.CC |m:1:2.3|")
+            canonicalize("CC.*O |m:2:0.1|"),
+            canonicalize("O*.CC |m:1:2.3|")
         );
     }
 
     #[test]
     fn remaps_sg_and_preserves_constraint() {
         let input = "OC(=O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht| constrain(a+b=15)";
-        let out = canonicalize_cxsmiles(input).unwrap();
+        let out = canonicalize(input).unwrap();
         assert!(out.ends_with("| constrain(a+b=15)"), "{out}");
 
         let parsed = split_cxsmiles(&out).unwrap();
@@ -341,13 +341,13 @@ mod tests {
                 assert!(atom < atom_count, "{field} in {out}");
             }
         }
-        assert_eq!(canonicalize_cxsmiles(&out).as_deref(), Some(out.as_str()));
+        assert_eq!(canonicalize(&out).as_deref(), Some(out.as_str()));
     }
 
     #[test]
     fn remaps_every_m_index() {
         let input = "OC(=O)CCCC.*O |m:7:3.4.5.6|";
-        let out = canonicalize_cxsmiles(input).unwrap();
+        let out = canonicalize(input).unwrap();
         let parsed = split_cxsmiles(&out).unwrap();
         let field = parsed.fields.unwrap();
         let rest = field.strip_prefix("m:").unwrap();
@@ -359,13 +359,13 @@ mod tests {
             .map(|i| i.parse::<usize>().unwrap())
             .collect::<Vec<_>>();
         assert!(candidates.iter().all(|&i| i < atom_count));
-        assert_eq!(canonicalize_cxsmiles(&out).as_deref(), Some(out.as_str()));
+        assert_eq!(canonicalize(&out).as_deref(), Some(out.as_str()));
     }
 
     #[test]
     fn sorts_m_candidates_after_canonicalizing_a_cyclized_chain() {
         let generated = crate::name2smiles("FA 20:2(5,8);[11-15cy5;13OH];OH").unwrap();
-        let canonical = canonicalize_cxsmiles(&generated).unwrap();
+        let canonical = canonicalize(&generated).unwrap();
         let fields = split_cxsmiles(&canonical).unwrap().fields.unwrap();
         let m = split_cx_fields(fields)
             .into_iter()
@@ -377,16 +377,16 @@ mod tests {
     #[test]
     fn remaps_labels_and_keeps_swappable_names() {
         let input = "OCC |$left;;right$| swappable(left,right)";
-        let out = canonicalize_cxsmiles(input).unwrap();
+        let out = canonicalize(input).unwrap();
         assert!(out.ends_with("| swappable(left,right)"), "{out}");
         assert!(out.contains("$"));
-        assert_eq!(canonicalize_cxsmiles(&out).as_deref(), Some(out.as_str()));
+        assert_eq!(canonicalize(&out).as_deref(), Some(out.as_str()));
     }
 
     #[test]
     fn rejects_bad_references_instead_of_emitting_stale_indices() {
-        assert_eq!(canonicalize_cxsmiles("CC |m:9:0.1|"), None);
-        assert_eq!(canonicalize_cxsmiles("CC |Sg:n:x:a:ht|"), None);
-        assert_eq!(canonicalize_cxsmiles("CC |m:1:0.2|"), None);
+        assert_eq!(canonicalize("CC |m:9:0.1|"), None);
+        assert_eq!(canonicalize("CC |Sg:n:x:a:ht|"), None);
+        assert_eq!(canonicalize("CC |m:1:0.2|"), None);
     }
 }

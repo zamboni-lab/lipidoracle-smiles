@@ -36,7 +36,7 @@ mod forward;
 mod nomenclature;
 mod reverse;
 
-pub use cxsmiles::canonicalize_cxsmiles;
+pub use cxsmiles::canonicalize;
 pub use depiction::smiles_for_depiction;
 pub use forward::{smiles_expand, ChainAtoms, LipidStructure};
 

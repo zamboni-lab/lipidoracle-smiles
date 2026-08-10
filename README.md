@@ -7,7 +7,7 @@ instead of choosing positions or chain assignments that were not measured.
 ## Quick start
 
 ```rust
-use lipid_notation::{canonicalize_cxsmiles, name2smiles, smiles_for_depiction, smiles2name};
+use lipid_notation::{canonicalize, name2smiles, smiles_for_depiction, smiles2name};
 
 // A fully determined structure needs plain SMILES only.
 let determined = name2smiles("FA 18:1(9Z)").unwrap();
@@ -18,7 +18,7 @@ let ambiguous = name2smiles("FA 18:1").unwrap();
 assert!(ambiguous.contains("Sg:"));
 
 // Reverse conversion accepts equivalent atom and branch orders.
-let canonical = canonicalize_cxsmiles(&ambiguous).unwrap();
+let canonical = canonicalize(&ambiguous).unwrap();
 assert_eq!(smiles2name(&canonical).as_deref(), Some("FA 18:1"));
 
 // Make the attachment chosen for an unlocalized group deterministic in a drawing.
@@ -40,7 +40,7 @@ The minimum supported Rust version is 1.85.
 |---|---|
 | `name2smiles(name)` | Convert a lipid name to SMILES or CXSMILES |
 | `smiles2name(smiles)` | Canonicalize and convert a supported structure to a lipid name |
-| `canonicalize_cxsmiles(smiles)` | Canonicalize SMILES and remap every atom-indexed CX field |
+| `canonicalize(smiles)` | Canonicalize SMILES and remap every atom-indexed CX field |
 | `smiles_for_depiction(smiles)` | Canonicalize/reindex CXSMILES and select a lipid-friendly bond for each `m:` group |
 | `name2structure(name)` | Return depiction SMILES plus per-chain atom indexes |
 | `smiles_expand(smiles)` | Expand variable-length regions into one drawable representative |
@@ -225,7 +225,7 @@ Worth noting: each chain gets its own equation, and equations are matched to
 variable letters restart per chain and can repeat. A fully determined chain
 contributes no equation at all.
 
-`canonicalize_cxsmiles` canonicalizes the molecular graph and updates every
+`canonicalize` canonicalizes the molecular graph and updates every
 atom reference in `Sg:`, `m:`, atom labels, and atom properties. Lipid trailer
 tokens are retained and normalized with their referenced labels. Calling the
 function twice returns the same string.
