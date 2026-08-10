@@ -30,6 +30,7 @@
 //!
 //! [CXSMILES]: https://docs.chemaxon.com/latest/formats_chemaxon-extended-smiles-and-smarts-cxsmiles-and-cxsmarts.html
 
+mod consensus;
 mod cxsmiles;
 mod depiction;
 mod forward;
@@ -53,8 +54,11 @@ pub use forward::{smiles_expand, ChainAtoms, LipidStructure};
 ///   `;OH`/`;oxo`/`;COOH` breakdown, so there is no position hypothesis at
 ///   all.
 ///
-/// Any bracketed confidence tail (`FA 18:2 [DB sn1: Δ9 92%]`) is stripped
-/// first; no structure format can carry a weighted distribution.
+/// A bracketed consensus tail (`FA 18:2 [DB sn1: Δ9 92%]`) never reaches the
+/// CXSMILES — no structure format can carry a weighted call — but it is no
+/// longer discarded either: it is re-encoded as `dbPos`/`mPos` tokens in the
+/// trailer, which is where this crate's metadata lives, and `smiles2name`
+/// reconstructs the tail from them.
 ///
 /// ```
 /// use lipid_notation::name2smiles;

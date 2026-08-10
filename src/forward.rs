@@ -180,8 +180,146 @@ struct ParsedChain {
 ///
 /// Reference: https://egonw.github.io/cdk-cxsmiles/templates.html#lipids-with-two-double-bonds-somewhere-in-the-tail
 pub(crate) fn generate_smiles(name: &str) -> Option<String> {
-    let (canonical, _) = crate::nomenclature::split_display_name(name);
-    build_lipid(&canonical, true).map(|b| b.smiles)
+    let (canonical, tail) = crate::nomenclature::split_display_name(name);
+    let built = build_lipid(&canonical, true)?;
+    Some(
+        match tail.as_deref().and_then(crate::consensus::parse_tail) {
+            Some(entries) => attach_consensus(built, &entries),
+            None => built.smiles,
+        },
+    )
+}
+
+/// Adds the `dbPos`/`mPos` tokens for a name's consensus tail, plus whatever
+/// anchors they need.
+///
+/// The tokens name atom labels rather than atom indices, so this makes sure
+/// the labels exist: the `$snN$` block is emitted even when the structure had
+/// no other reason for one, and each `m:` stub is labelled so a token about a
+/// floating group can point at that group rather than merely at its chain.
+///
+/// Nothing here touches the CXSMILES fields themselves — the consensus is
+/// metadata and stays in the trailer, which is what it is for.
+fn attach_consensus(built: Built, entries: &[crate::consensus::Consensus]) -> String {
+    let (base, fields, trailer) = match built.smiles.split_once(" |") {
+        Some((base, rest)) => match rest.split_once('|') {
+            Some((fields, trailer)) => (base, fields.to_string(), trailer.trim().to_string()),
+            None => (built.smiles.as_str(), String::new(), String::new()),
+        },
+        None => (built.smiles.as_str(), String::new(), String::new()),
+    };
+
+    // Label each `m:` stub `<abbr><n>`, so an unlocalized group has a name.
+    let stubs = stub_labels(base, &fields, &built);
+    let mut sites: Vec<(String, usize)> = built
+        .sn_sites
+        .iter()
+        .map(|(sn, atom)| (format!("sn{sn}"), *atom))
+        .collect();
+    sites.extend(
+        stubs
+            .iter()
+            .map(|(label, atom, _, _)| (label.clone(), *atom)),
+    );
+    sites.sort_by_key(|(_, atom)| *atom);
+
+    let tokens = crate::consensus::tokens(entries, |entry| {
+        // A token about a group the structure left floating anchors to that
+        // stub; one about a position the structure already states anchors to
+        // the chain.
+        (!entry.is_localized())
+            .then(|| {
+                stubs
+                    .iter()
+                    .find(|(_, _, kind, sn)| *kind == entry.kind && *sn == entry.sn)
+                    .map(|(label, _, _, _)| label.clone())
+            })
+            .flatten()
+    });
+
+    let fields = match fields.contains('$') {
+        true => fields,
+        false => {
+            let block = label_block(&sites);
+            if fields.is_empty() {
+                block
+            } else {
+                format!("{block},{fields}")
+            }
+        }
+    };
+
+    let mut trailer_tokens: Vec<String> = trailer
+        .split(';')
+        .filter(|t| !t.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    trailer_tokens.extend(tokens);
+    format!("{base} |{fields}| {}", trailer_tokens.join(";"))
+        .trim_end()
+        .to_string()
+}
+
+/// `(label, atom, group kind, sn)` for every `m:` stub in a built structure.
+///
+/// The stub's own component says which group it is (`*O` is a hydroxyl), and
+/// its candidate list says which chain, so a consensus entry can be matched to
+/// the stub it is about.
+fn stub_labels(base: &str, fields: &str, built: &Built) -> Vec<(String, usize, String, usize)> {
+    let components: Vec<&str> = base.split('.').collect();
+    let mut out = Vec::new();
+    let mut counts: HashMap<String, usize> = HashMap::new();
+
+    for field in fields.split(',') {
+        let Some(rest) = field.strip_prefix("m:") else {
+            continue;
+        };
+        let Some((atom, candidates)) = rest.split_once(':') else {
+            continue;
+        };
+        let Ok(atom) = atom.parse::<usize>() else {
+            continue;
+        };
+        let sites: Vec<usize> = candidates
+            .split('.')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        let Some((sn, _)) = built
+            .chains
+            .iter()
+            .find(|(_, carbons)| sites.iter().all(|s| carbons.contains(s)))
+        else {
+            continue;
+        };
+        // The stub's branch, e.g. `*O`, names the group via SUBSTITUENTS.
+        let branch = components
+            .iter()
+            .skip(1)
+            .find_map(|c| c.strip_prefix('*'))
+            .unwrap_or("");
+        let Some((kind, _)) = SUBSTITUENTS.iter().find(|(_, b)| *b == branch) else {
+            continue;
+        };
+        let n = counts.entry((*kind).to_string()).or_insert(0);
+        *n += 1;
+        out.push((format!("{kind}{n}"), atom, (*kind).to_string(), *sn));
+    }
+    out
+}
+
+/// A `$...$` block from `(label, atom)` pairs.
+fn label_block(sites: &[(String, usize)]) -> String {
+    let last = sites.iter().map(|(_, atom)| *atom).max().unwrap_or(0);
+    let labels: Vec<&str> = (0..=last)
+        .map(|i| {
+            sites
+                .iter()
+                .find(|(_, atom)| *atom == i)
+                .map(|(label, _)| label.as_str())
+                .unwrap_or("")
+        })
+        .collect();
+    format!("${}$", labels.join(";"))
 }
 
 /// Builds one lipid's SMILES plus, for every chain, the atom index of each
@@ -378,6 +516,9 @@ pub(crate) fn class_needs_multi_chain(class: &str) -> bool {
 struct Built {
     smiles: String,
     chains: Vec<(usize, Vec<usize>)>,
+    /// `(sn, atom)` of each chain's linking atom, for anchoring trailer
+    /// tokens that name a chain.
+    sn_sites: Vec<(usize, usize)>,
 }
 
 impl Built {
@@ -386,6 +527,7 @@ impl Built {
         Built {
             smiles,
             chains: Vec::new(),
+            sn_sites: Vec::new(),
         }
     }
 }
@@ -790,7 +932,11 @@ impl CxBuilder {
             .trim_end()
             .to_string()
         };
-        Built { smiles, chains }
+        Built {
+            smiles,
+            chains,
+            sn_sites,
+        }
     }
 }
 

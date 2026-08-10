@@ -93,7 +93,7 @@ recovers some of that, but not all of it:
 | a double bond somewhere in a stretch (`18:1`) | no | partly: `Sg:` marks the stretch but has nowhere to record its length |
 | a modification on one of many carbons (`;OH`) | no | yes: `m:` position-variation |
 | chains known, sn assignment not (`16:0_18:1`) | no | badly: `RG:` over-generates and cannot coexist with `Sg:` |
-| a weighted call (`Δ9 92%`) | no | no |
+| a weighted call (`Δ9 92%`) | no | no — it goes in the trailer instead |
 | sum composition (`PC 34:1`) | no | no |
 
 ### The design rule
@@ -126,6 +126,27 @@ something that can carry a second kind of statement:
 |---|---|
 | `constrain(a+b=15)` | the `Sg:` runs marked `a` and `b` span 15 carbons between them |
 | `swappable(sn1,sn2)` | the chains at these labelled positions may be exchanged |
+| `dbPos(sn1:9@92)` | the double bond at Δ9 on sn-1 was called with 92% confidence |
+| `mPos(OH1:11OH@50,13OH@50)` | the group on the stub labelled `OH1` is at position 11 or 13, evenly split |
+
+`dbPos` and `mPos` carry the bracketed consensus tail that instrument software
+puts after a name — `FA 18:2(9,12) [DB sn1: Δ9 100%, Δ12 88%]`. No structure
+format can hold a weighted call, so this used to be stripped and thrown away.
+It is metadata, and the trailer is where this crate's metadata lives, so it is
+carried there instead and `smiles2name` reconstructs the original tail from it.
+
+Within a token, `,` separates positions and `|` separates *mutually exclusive*
+candidates for one feature: `dbPos(sn1:5@100|14@50|15@50)` reads as "Δ5 for
+certain, plus one more double bond that is either Δ14 or Δ15". Positions and
+percentages are written `pos@percent` with no `Δ` and no spaces, because a
+`.smi` reader splits the line on whitespace and would truncate the token; the
+original spelling comes back on the way out.
+
+These tokens only ever *refine* what the structure already says. An entry for a
+position the SMILES commits to records how sure that call was. A set of `|`
+alternatives corresponds to a double bond left inside an `Sg:` run, or a group
+left on an `m:` stub — narrowing "somewhere in this stretch" to "one of these,
+with these odds" is more information, and still not a determination.
 
 **These tokens are not official CXSMILES.** They sit in what a SMILES reader
 treats as the *title* field, so a toolkit reads them as the molecule's name and
@@ -137,13 +158,15 @@ structure.
 
 Two rules make the trailer safe to extend:
 
-- **Tokens name things, never positions.** `constrain` names `Sg:` variables and
-  `swappable` names `$snN$` labels — both of which toolkits maintain across
-  canonicalization. An atom *index* in the trailer would silently rot the first
-  time a molecule was renumbered, because nothing rewrites the title field.
-- **Anything stated in the trailer is anchored in the pipes.** A `swappable`
-  token always comes with its `$snN$` labels, so the `|...|` block is never
-  empty while the trailer has something to say. That keeps the one-character
+- **Tokens name things, never positions.** `constrain` names `Sg:` variables,
+  and `swappable`, `dbPos` and `mPos` name `$...$` atom labels — a chain's
+  `snN`, or an `m:` stub's own label. Toolkits maintain those labels across
+  canonicalization: renumber the molecule and the label travels with its atom.
+  An atom *index* in the trailer would silently rot the first time that
+  happened, because nothing rewrites the title field.
+- **Anything stated in the trailer is anchored in the pipes.** A `swappable`,
+  `dbPos` or `mPos` token always comes with the `$...$` labels it names, so the
+  `|...|` block is never empty while the trailer has something to say. That keeps the one-character
   check honest: **pipes mean something was undetermined.**
 
 The same shape extends to anything else worth stating — the grammar is open, and
@@ -179,7 +202,9 @@ one shaped the encoding above:
   the *or* that unresolved regiochemistry needs. Both were emitted by earlier
   revisions of this crate and both were wrong.
 - **No construct expresses weighted alternatives**, so a 92% call and a 100%
-  call are written identically and the percentages are stripped.
+  call are written identically in the structure. The percentages are not lost:
+  they move to `dbPos`/`mPos` trailer tokens, which name the chain or the `m:`
+  stub they refer to and never touch a CXSMILES field.
 - **No construct varies a bond order within a structure**, which is why sum
   compositions such as `PC 34:1` are rejected rather than guessed.
 
@@ -262,8 +287,8 @@ toolkit rewrites the molecule.
   linkage positions and are not converted.
 - A functional group on C1 of an acyl chain can change the linkage itself and
   is rejected.
-- Confidence percentages are display metadata and are stripped before
-  structural conversion.
+- Confidence percentages never enter the structure. They are carried in the
+  trailer as `dbPos`/`mPos` tokens and restored by `smiles2name`.
 - `smiles2name` recognizes structures within this crate's supported lipid
   templates; it is not a general structure-to-name engine.
 - Some equivalent input names normalize to one spelling during reverse

@@ -227,6 +227,13 @@ pub(crate) fn parse_smiles(smi: &str) -> Option<String> {
     let smi = smi.trim();
     let canonical = canonicalize(smi)?;
 
+    // A consensus tail is metadata, but it is *in* the string, so a candidate
+    // name without it cannot regenerate what was handed in. Each candidate is
+    // therefore tried with every tail the trailer could have come from. A stub
+    // anchor names a group rather than a chain, so the chain it belongs to is
+    // enumerated and verification picks the right one.
+    let tails = consensus_tails(&canonical);
+
     let matches = |candidate: &String| {
         generate_smiles(candidate)
             .and_then(|generated| canonicalize(&generated))
@@ -237,7 +244,52 @@ pub(crate) fn parse_smiles(smi: &str) -> Option<String> {
     // Recognition works on the molecule graph, so the input's atom and
     // branch order does not matter. Every hypothesis is verified in
     // canonical space before it is returned.
-    graph_candidates(&canonical).into_iter().find(matches)
+    graph_candidates(&canonical)
+        .into_iter()
+        .flat_map(|name| {
+            tails
+                .iter()
+                .map(move |tail| match tail {
+                    Some(tail) => format!("{name} {tail}"),
+                    None => name.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .find(matches)
+}
+
+/// Every consensus tail the trailer's `dbPos`/`mPos` tokens could have come
+/// from, plus `None` for "no tail at all".
+///
+/// `snN` anchors name their chain outright. A stub anchor names a floating
+/// group instead, so the chain is not written down — the possibilities are
+/// enumerated here and the regenerate-and-compare in `parse_smiles` discards
+/// the wrong ones.
+fn consensus_tails(canonical: &str) -> Vec<Option<String>> {
+    let trailer = match canonical.split_once(" |") {
+        Some((_, rest)) => rest.split_once('|').map(|(_, t)| t).unwrap_or("").trim(),
+        None => "",
+    };
+    if !trailer.contains("dbPos(") && !trailer.contains("mPos(") {
+        return vec![None];
+    }
+
+    let mut out = Vec::new();
+    for assumed_sn in 1..=4 {
+        let entries = crate::consensus::from_tokens(trailer, |anchor| {
+            anchor
+                .strip_prefix("sn")
+                .and_then(|n| n.parse().ok())
+                .or(Some(assumed_sn))
+        });
+        if let Some(tail) = crate::consensus::format_tail(&entries) {
+            if !out.contains(&Some(tail.clone())) {
+                out.push(Some(tail));
+            }
+        }
+    }
+    out.push(None);
+    out
 }
 struct GraphTemplate {
     class: &'static str,

@@ -7,7 +7,8 @@
 /// square brackets, e.g.
 /// `"FA 20:4;11OH [DB sn1: Δ5 100%, Δ8 100%; OH sn1: 11 100%]"`. The tail is
 /// metadata that structure formats cannot represent, so structural conversion
-/// uses only the canonical name.
+/// uses only the canonical name — the tail is carried separately, as trailer
+/// tokens (see `crate::consensus`).
 pub(crate) fn split_display_name(name: &str) -> (String, Option<String>) {
     let trimmed = name.trim();
     if let Some(start) = trimmed.find(" [") {
