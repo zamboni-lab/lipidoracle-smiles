@@ -1,0 +1,5 @@
+# Keep line endings stable so `cargo run --example bless_testdata` produces a
+# diff of content only. Rust writes LF; a CRLF checkout would otherwise make
+# every blessed row look changed.
+* text=auto eol=lf
+*.png binary
