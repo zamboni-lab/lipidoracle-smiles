@@ -1,13 +1,14 @@
 //! Reverse conversion from SMILES/CXSMILES to Shorthand2020 lipid notation.
 //!
-//! Native output uses a fast layout reader. Other atom and branch orders use
-//! graph-based headgroup and chain recognition. Every candidate name is
-//! regenerated and compared in canonical CXSMILES form before it is returned.
+//! Headgroups and chains are recognized from the molecule graph, so any atom
+//! or branch order works — this crate's own output, a canonicalized form, or a
+//! third-party spelling of the same structure. Every candidate name is
+//! regenerated and compared in canonical CXSMILES form before it is returned,
+//! so a bug here costs coverage but cannot return a name that means something
+//! other than the structure given.
 
 use crate::canonicalize;
-use crate::forward::{
-    count_atoms, generate_smiles, trailer_equations, trailer_is_swappable, SUBSTITUENTS,
-};
+use crate::forward::{generate_smiles, trailer_equations, trailer_is_swappable, SUBSTITUENTS};
 use chematic_core::{AtomIdx, BondOrder, Element, Molecule, MoleculeBuilder};
 use chematic_smiles::{canonical_smiles, parse};
 use std::collections::{HashMap, HashSet};
@@ -94,217 +95,6 @@ impl<'a> Cx<'a> {
             equations,
         }
     }
-
-    /// The `Sg:` scaffold belonging to the chain occupying atoms
-    /// `span`: how many double bonds it stands in for, and how many carbons
-    /// expansion would add. Equations pair with markers in emission order,
-    /// so this walks both together.
-    fn scaffold(&self, span: std::ops::Range<usize>) -> (usize, u32) {
-        let mut consumed = 0;
-        for &(terms, sum) in &self.equations {
-            if consumed + terms > self.sg.len() {
-                break;
-            }
-            let markers = &self.sg[consumed..consumed + terms];
-            consumed += terms;
-            if markers.iter().all(|a| span.contains(a)) {
-                // The scaffold writes one marker per double bond plus one,
-                // and every variable is at least 1, so the carbons it hides
-                // are the constraint sum less the marker count.
-                return (terms - 1, (sum - terms) as u32);
-            }
-        }
-        (0, 0)
-    }
-}
-
-/// Reads one chain fragment — the SMILES written for a single acyl/alkyl
-/// chain, plus any `.*X` components its `m:` blocks point at — into the chain
-/// it was built from. `atom_base` is the fragment's first atom index in the
-/// whole string, which is what the `Sg:`/`m:` blocks are numbered against.
-///
-/// `first_carbon` is the chain position the fragment's first carbon holds: 1
-/// for an ordinary chain, 3 for a sphingoid base's tail, whose C1 and C2 live
-/// in the headgroup template.
-fn read_chain(text: &str, atom_base: usize, first_carbon: u32, cx: &Cx) -> Option<Chain> {
-    let mut parts = text.split('.');
-    let main = parts.next()?;
-
-    let mut chain = Chain::default();
-    let chars: Vec<char> = main.chars().collect();
-    let mut i = 0;
-    let mut atom = atom_base;
-    let mut carbon = first_carbon;
-    // Bond text sitting between the previous carbon and this one, and the
-    // position of that previous carbon.
-    let mut pending_bond = String::new();
-    let mut labels: Vec<(usize, u32)> = Vec::new();
-    let mut bonds: Vec<(u32, String)> = Vec::new();
-    let mut carbon_atoms: Vec<usize> = Vec::new();
-
-    while i < chars.len() {
-        match chars[i] {
-            'C' => {
-                if carbon > first_carbon {
-                    bonds.push((carbon - 1, std::mem::take(&mut pending_bond)));
-                }
-                carbon_atoms.push(atom);
-                atom += 1;
-                i += 1;
-                // Ring-closure labels bind to the atom they follow.
-                while i < chars.len() && chars[i] == '%' {
-                    let start = i + 1;
-                    let mut end = start;
-                    while end < chars.len() && chars[end].is_ascii_digit() {
-                        end += 1;
-                    }
-                    labels.push((
-                        chars[start..end].iter().collect::<String>().parse().ok()?,
-                        carbon,
-                    ));
-                    i = end;
-                }
-                // Then its substituent branches.
-                while i < chars.len() && chars[i] == '(' {
-                    let (branch, next) = read_branch(&chars, i)?;
-                    atom += count_atoms(&branch);
-                    if carbon == 1 && branch == "=O" && first_carbon == 1 {
-                        // C1's carbonyl is the ester/amide linkage itself,
-                        // not an `oxo` group written on the chain.
-                        chain.prefix = "";
-                    } else {
-                        chain.mods.push((carbon, abbreviation(&branch)?));
-                    }
-                    i = next;
-                }
-                carbon += 1;
-            }
-            'O' => {
-                // The only bare heteroatom inside a chain fragment is an
-                // epoxide's bridging oxygen.
-                pending_bond.push('O');
-                atom += 1;
-                i += 1;
-            }
-            c @ ('=' | '/' | '\\' | '#') => {
-                pending_bond.push(c);
-                i += 1;
-            }
-            _ => return None,
-        }
-    }
-    chain.carbon = carbon - 1;
-    if chain.carbon == 0 {
-        return None;
-    }
-
-    // An acyl chain is the one whose C1 carries the carbonyl; anything else
-    // is an ether linkage, vinyl if its first bond is the mandatory C1=C2.
-    let acyl = main.starts_with("C(=O)") && first_carbon == 1;
-    if first_carbon == 1 && !acyl {
-        chain.prefix = if bonds.first().is_some_and(|(_, b)| b.contains('=')) {
-            "P-"
-        } else {
-            "O-"
-        };
-    }
-
-    for (k, bond) in &bonds {
-        if bond.contains('=') {
-            chain.db.push((*k, None));
-        }
-    }
-    // Geometry is written as a marker on the bond *after* the double bond:
-    // `\` closes a cis pair, `/` a trans one.
-    for (pos, geom) in chain.db.iter_mut() {
-        if let Some((_, after)) = bonds.iter().find(|(k, _)| *k == *pos + 1) {
-            *geom = match () {
-                _ if after.contains('\\') => Some('Z'),
-                _ if after.contains('/') => Some('E'),
-                _ => None,
-            };
-        }
-    }
-
-    // Ring-closure labels used exactly twice are a ring; an epoxide is the
-    // adjacent-carbon case whose bond text carries the bridging oxygen.
-    labels.sort();
-    for pair in labels.chunks(2) {
-        let [(la, a), (lb, b)] = pair else {
-            return None;
-        };
-        if la != lb {
-            return None;
-        }
-        let bridged = bonds
-            .iter()
-            .any(|(k, bond)| k == a.min(b) && bond.contains('O'));
-        chain.rings.push((*a.min(b), *a.max(b), bridged));
-    }
-    // A ring bond is not a chain double bond the name should place.
-    chain.db.retain(|(pos, _)| {
-        !chain
-            .rings
-            .iter()
-            .any(|(s, e, bridged)| *bridged && pos >= s && pos < e)
-    });
-
-    let span = atom_base..atom;
-    let (unlocalized, hidden) = cx.scaffold(span.clone());
-    chain.unlocalized_db = unlocalized;
-    chain.carbon += hidden;
-    // The scaffold's own double bonds are the unlocalized ones, and they are
-    // always the last written, so they are dropped from the placed list.
-    for _ in 0..unlocalized {
-        chain.db.pop();
-    }
-
-    // Each `.*X` component is a group the name declared without a position.
-    // Its `m:` block has to point at this chain's carbons for it to be ours.
-    let mut floating = atom;
-    for part in parts {
-        let branch = part.strip_prefix('*')?;
-        let mine = cx
-            .m
-            .iter()
-            .any(|(idx, sites)| *idx == floating && sites.iter().all(|s| carbon_atoms.contains(s)));
-        if !mine {
-            return None;
-        }
-        chain.mods.push((0, abbreviation(branch)?));
-        floating += count_atoms(part);
-    }
-
-    chain.db.sort();
-    chain.mods.sort();
-    Some(chain)
-}
-
-/// Reads the parenthesized branch starting at `chars[open]`, returning its
-/// contents and the index just past its closing paren.
-fn read_branch(chars: &[char], open: usize) -> Option<(String, usize)> {
-    let mut depth = 0;
-    for (i, &c) in chars.iter().enumerate().skip(open) {
-        match c {
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((chars[open + 1..i].iter().collect(), i + 1));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// The Table 1A abbreviation whose branch is `branch`.
-fn abbreviation(branch: &str) -> Option<&'static str> {
-    SUBSTITUENTS
-        .iter()
-        .find(|(_, b)| *b == branch)
-        .map(|(abbr, _)| *abbr)
 }
 
 /// Writes a chain back out as its shorthand token, e.g. `18:1(9Z);5OH`.
@@ -407,35 +197,6 @@ fn in_ring_span(chain: &Chain, pos: u32) -> bool {
         .any(|(s, e, bridged)| !*bridged && pos >= *s && pos <= *e)
 }
 
-/// One class's resolved template: the literal text the builder writes, split
-/// at its chain slots, and the sn position each gap holds.
-///
-/// A slot's leading ester/ether `O` belongs to the segment before it, so an
-/// unfilled position is simply an empty gap — which is exactly the bare `O`
-/// `build_chain_slot` writes for it.
-struct Layout {
-    class: &'static str,
-    segments: &'static [&'static str],
-    sn: &'static [usize],
-}
-
-/// Every glycerol-backboned class shares one shape; which of MG/DG/TG it is
-/// follows from how far along the last filled slot sits.
-const GLYCEROL: Layout = Layout {
-    class: "",
-    segments: &["C(CO", ")(O", ")CO", ""],
-    sn: &[3, 2, 1],
-};
-
-const GPL_TAILS: &[(&str, &str)] = &[
-    ("PC", "OP(=O)([O-])OCC[N+](C)(C)C"),
-    ("PE", "OP(=O)(O)OCCN"),
-    ("PS", "OP(=O)(O)OCC(N)C(=O)O"),
-    ("PG", "OP(=O)(O)OCC(O)CO"),
-    ("PI", "OP(=O)(O)OC1C(O)C(O)C(O)C(O)C1O"),
-    ("PA", "OP(=O)(O)O"),
-];
-
 /// `(class, headgroup tail, carries an N-acyl chain)`.
 const SPHINGO: &[(&str, &str, bool)] = &[
     ("SM", "OP(=O)([O-])OCC[N+](C)(C)C", true),
@@ -446,89 +207,6 @@ const SPHINGO: &[(&str, &str, bool)] = &[
     ("S1P", "OP(=O)(O)O", false),
     ("Sph", "O", false),
 ];
-
-const SINGLE_CHAIN: &[Layout] = &[
-    Layout {
-        class: "AMP-FA",
-        segments: &["[n+]1ccccc1-c1ccc(CN", ")cc1"],
-        sn: &[1],
-    },
-    Layout {
-        class: "CE",
-        segments: &["C12(CC=C3CC(O", ")CCC3(C)C1CCC1(C)C(C(C)CCCC(C)C)CCC21)"],
-        sn: &[1],
-    },
-    Layout {
-        class: "CAR",
-        segments: &["O(", ")[C@H](CC(=O)[O-])C[N+](C)(C)C"],
-        sn: &[1],
-    },
-    Layout {
-        class: "NAE",
-        segments: &["OCCN", ""],
-        sn: &[1],
-    },
-    Layout {
-        class: "FA",
-        segments: &["O", ""],
-        sn: &[1],
-    },
-];
-
-/// Splits `base` along a layout's literal segments, returning the text and
-/// starting atom index of each chain gap.
-///
-/// A gap ends at the first point where the remaining text begins with the
-/// next segment *and* the parentheses opened inside the gap have all closed —
-/// a chain's own `(=O)` branches close before the backbone's do.
-fn split_layout<'a>(base: &'a str, segments: &[&str]) -> Option<Vec<(&'a str, usize)>> {
-    let mut gaps = Vec::new();
-    let mut rest = base;
-    let mut atom = 0;
-
-    let first = segments.first()?;
-    rest = rest.strip_prefix(first)?;
-    atom += count_atoms(first);
-
-    for next in &segments[1..] {
-        let end = if next.is_empty() {
-            // The last segment: the gap runs to the end of the string.
-            rest.len()
-        } else if rest.starts_with(*next) {
-            // The next segment starts immediately — an unfilled position.
-            0
-        } else {
-            let mut depth = 0i32;
-            let mut found = None;
-            for (i, c) in rest.char_indices() {
-                match c {
-                    '(' => depth += 1,
-                    ')' => depth -= 1,
-                    _ => {}
-                }
-                if depth < 0 {
-                    break;
-                }
-                let at = i + c.len_utf8();
-                if depth == 0 && rest[at..].starts_with(*next) {
-                    found = Some(at);
-                    break;
-                }
-            }
-            found?
-        };
-        gaps.push((&rest[..end], atom));
-        atom += count_atoms(&rest[..end]);
-        rest = &rest[end..];
-        rest = rest.strip_prefix(*next)?;
-        atom += count_atoms(next);
-    }
-    if rest.is_empty() {
-        Some(gaps)
-    } else {
-        None
-    }
-}
 
 /// Assembles the chain tokens into sn order, writing `0:0` for a gap that
 /// some later position fills. The separator is `_` when a `swappable` token
@@ -544,7 +222,7 @@ fn join_slots(mut slots: Vec<(usize, Option<String>)>, sep: &str) -> Option<(usi
 }
 
 /// Reads a SMILES/CXSMILES string back into a Shorthand2020 name, or `None`
-/// when no name this generator accepts is canonically equivalent to it.
+/// when no name this generator would accept regenerates it.
 pub(crate) fn parse_smiles(smi: &str) -> Option<String> {
     let smi = smi.trim();
     let canonical = canonicalize(smi)?;
@@ -556,153 +234,11 @@ pub(crate) fn parse_smiles(smi: &str) -> Option<String> {
             == Some(canonical.as_str())
     };
 
-    // Keep the fast template reader for the crate's native serialization,
-    // then fall back to graph perception for canonical/third-party atom
-    // orders. Every hypothesis is verified in canonical space.
-    candidates(&Cx::split(smi))
-        .into_iter()
-        .find(&matches)
-        .or_else(|| graph_candidates(&canonical).into_iter().find(matches))
+    // Recognition works on the molecule graph, so the input's atom and
+    // branch order does not matter. Every hypothesis is verified in
+    // canonical space before it is returned.
+    graph_candidates(&canonical).into_iter().find(matches)
 }
-
-/// Every name worth testing against the input, cheapest and most specific
-/// first. Each is only a hypothesis — `parse_smiles` keeps the one that
-/// regenerates the string.
-fn candidates(cx: &Cx) -> Vec<String> {
-    let mut out = Vec::new();
-    let sep = if cx.swappable { "_" } else { "/" };
-
-    // Sterol has no chains at all.
-    out.push("ST".to_string());
-
-    let read = |text: &str, atom: usize| -> Option<String> {
-        (!text.is_empty()).then(|| read_chain(text, atom, 1, cx).as_ref().map(format_chain))?
-    };
-
-    for layout in SINGLE_CHAIN {
-        if let Some(gaps) = split_layout(cx.base, layout.segments) {
-            if let Some(token) = read(gaps[0].0, gaps[0].1) {
-                out.push(format!("{} {token}", layout.class));
-            }
-        }
-    }
-
-    if let Some(gaps) = split_layout(cx.base, GLYCEROL.segments) {
-        let slots: Vec<(usize, Option<String>)> = GLYCEROL
-            .sn
-            .iter()
-            .zip(&gaps)
-            .map(|(sn, (text, atom))| (*sn, read(text, *atom)))
-            .collect();
-        if let Some((filled, tokens)) = join_slots(slots, sep) {
-            out.push(format!("{} {tokens}", ["MG", "DG", "TG"][filled - 1]));
-        }
-    }
-
-    for (class, tail) in GPL_TAILS {
-        let segments = [format!("C(C{tail})(O"), ")CO".to_string(), String::new()];
-        let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
-        if let Some(gaps) = split_layout(cx.base, &segments) {
-            let slots: Vec<(usize, Option<String>)> = [2, 1]
-                .iter()
-                .zip(&gaps)
-                .map(|(sn, (text, atom))| (*sn, read(text, *atom)))
-                .collect();
-            if let Some((filled, tokens)) = join_slots(slots, sep) {
-                // One chain at sn1 and nothing at sn2 is the lyso form.
-                out.push(format!(
-                    "{}{class} {tokens}",
-                    if filled == 1 { "L" } else { "" }
-                ));
-            }
-        }
-    }
-
-    let cl = ["C(COP(=O)(O)OCC(O", ")CO", ")(O)COP(=O)(O)OCC(O", ")CO", ""];
-    if let Some(gaps) = split_layout(cx.base, &cl) {
-        let slots: Vec<(usize, Option<String>)> = [2, 1, 4, 3]
-            .iter()
-            .zip(&gaps)
-            .map(|(sn, (text, atom))| (*sn, read(text, *atom)))
-            .collect();
-        if let Some((_, tokens)) = join_slots(slots, sep) {
-            out.push(format!("CL {tokens}"));
-        }
-    }
-
-    out.extend(sphingoid_candidates(cx));
-    out
-}
-
-/// Sphingoids need their own reader: the base's C1 and C2 are written by the
-/// template, its C3 (and C4, on a triol) carry hydroxyls the `d`/`t` prefix
-/// implies rather than states, and its tail picks up at C3.
-fn sphingoid_candidates(cx: &Cx) -> Vec<String> {
-    let mut out = Vec::new();
-    for (class, tail, has_n_acyl) in SPHINGO {
-        let head = format!("C(C{tail})(N");
-        let Some(rest) = cx.base.strip_prefix(&head) else {
-            continue;
-        };
-        let mut atom = count_atoms(&head);
-
-        // The N-acyl chain, if this class has one, runs to the paren that
-        // closes the branch the template opened.
-        let mut depth = 1i32;
-        let mut split = None;
-        for (i, c) in rest.char_indices() {
-            match c {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        split = Some(i);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let Some(split) = split else { continue };
-        let (acyl_text, base_text) = (&rest[..split], &rest[split + 1..]);
-        if acyl_text.is_empty() == *has_n_acyl {
-            continue;
-        }
-
-        let acyl = if *has_n_acyl {
-            let Some(c) = read_chain(acyl_text, atom, 1, cx) else {
-                continue;
-            };
-            atom += count_atoms(acyl_text);
-            Some(format_chain(&c))
-        } else {
-            None
-        };
-
-        let Some(mut base) = read_chain(base_text, atom, 3, cx) else {
-            continue;
-        };
-        // The tail was read with C3 as its first carbon, so `carbon` is
-        // already the base's full length — C1 and C2 live in the template.
-        // The hydroxyls at C3 (and C4 for a triol) are what the prefix
-        // letter says rather than something the name spells out.
-        let triol = base.mods.contains(&(4, "OH"));
-        if !base.mods.contains(&(3, "OH")) {
-            continue;
-        }
-        base.prefix = if triol { "t" } else { "d" };
-        base.mods.retain(|m| *m != (3, "OH") && *m != (4, "OH"));
-
-        let token = format_chain(&base);
-        out.push(match acyl {
-            Some(acyl) => format!("{class} {token}/{acyl}"),
-            None => format!("{class} {token}"),
-        });
-    }
-    out
-}
-
-#[derive(Clone)]
 struct GraphTemplate {
     class: &'static str,
     chains: usize,
@@ -715,7 +251,11 @@ fn graph_candidates(canonical: &str) -> Vec<String> {
     let Ok(mol) = parse(cx.base) else {
         return Vec::new();
     };
-    if cx.base == generate_smiles("ST").as_deref().unwrap_or("") {
+    // The sterol template has no chains for the graph matcher to find, so it
+    // is compared whole. `canonical` has been through `canonicalize`, so the
+    // reference has to be as well — comparing against the raw emitted form
+    // never matched.
+    if canonicalize(&generate_smiles("ST").unwrap_or_default()).as_deref() == Some(canonical) {
         return vec!["ST".to_string()];
     }
 
@@ -1370,27 +910,38 @@ fn induced_molecule(mol: &Molecule, atoms: &[usize]) -> Option<(Molecule, HashMa
     Some((builder.build(), mapping))
 }
 
-fn connected_components(mol: &Molecule, removed: &HashSet<(usize, usize)>) -> Vec<Vec<usize>> {
+/// Every atom reachable from `start` without crossing a `removed` bond.
+pub(crate) fn reachable_from(
+    mol: &Molecule,
+    start: usize,
+    removed: &HashSet<(usize, usize)>,
+) -> HashSet<usize> {
     let mut seen = HashSet::new();
+    let mut stack = vec![start];
+    while let Some(atom) = stack.pop() {
+        if !seen.insert(atom) {
+            continue;
+        }
+        for (neighbor, _) in mol.neighbors(AtomIdx(atom as u32)) {
+            let neighbor = neighbor.0 as usize;
+            if !removed.contains(&normalized_edge(atom, neighbor)) {
+                stack.push(neighbor);
+            }
+        }
+    }
+    seen
+}
+
+fn connected_components(mol: &Molecule, removed: &HashSet<(usize, usize)>) -> Vec<Vec<usize>> {
+    let mut seen: HashSet<usize> = HashSet::new();
     let mut out = Vec::new();
     for start in 0..mol.atom_count() {
         if seen.contains(&start) {
             continue;
         }
-        let mut part = Vec::new();
-        let mut stack = vec![start];
-        while let Some(atom) = stack.pop() {
-            if !seen.insert(atom) {
-                continue;
-            }
-            part.push(atom);
-            for (neighbor, _) in mol.neighbors(AtomIdx(atom as u32)) {
-                let neighbor = neighbor.0 as usize;
-                if !removed.contains(&normalized_edge(atom, neighbor)) {
-                    stack.push(neighbor);
-                }
-            }
-        }
+        let mut part: Vec<usize> = reachable_from(mol, start, removed).into_iter().collect();
+        part.sort_unstable();
+        seen.extend(&part);
         out.push(part);
     }
     out
@@ -1445,7 +996,7 @@ fn element(mol: &Molecule, atom: usize) -> Element {
     mol.atom(AtomIdx(atom as u32)).element
 }
 
-fn single_bond(order: BondOrder) -> bool {
+pub(crate) fn single_bond(order: BondOrder) -> bool {
     matches!(order, BondOrder::Single | BondOrder::Up | BondOrder::Down)
 }
 
@@ -1530,10 +1081,21 @@ mod tests {
             "FA 18:0;9Ep",
             "FA 19:0;[11-13cy3:0]",
             "FA 19:0;[9-11cy3:1(9)]",
-            "FA 18:1(6Z);[14-18cy5:1(15)]",
         ] {
             assert_eq!(round(name).as_deref(), Some(name), "{name}");
         }
+
+        // A cyclopentene ring is symmetric about the carbon it hangs from, so
+        // a double bond at 15-16 and one at 17-18 are the same molecule. The
+        // reverse direction returns one spelling for both; it regenerates the
+        // same structure, which is the property that matters.
+        let gorlic = "FA 18:1(6Z);[14-18cy5:1(15)]";
+        let recovered = round(gorlic).expect("should resolve");
+        assert_eq!(
+            generate_smiles(&recovered).and_then(|s| canonicalize(&s)),
+            generate_smiles(gorlic).and_then(|s| canonicalize(&s)),
+            "{gorlic} came back as {recovered}, a different structure"
+        );
     }
 
     /// Not a general SMILES parser, and honest about it.

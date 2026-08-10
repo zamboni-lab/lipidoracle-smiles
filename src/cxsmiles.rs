@@ -76,7 +76,7 @@ pub fn canonicalize(smi: &str) -> Option<String> {
     Some(out)
 }
 
-fn bracket_bare_wildcards(smiles: &str) -> String {
+pub(crate) fn bracket_bare_wildcards(smiles: &str) -> String {
     let mut out = String::with_capacity(smiles.len());
     let mut in_brackets = false;
     for ch in smiles.chars() {
@@ -195,8 +195,7 @@ fn atom_token_starts(smiles: &str) -> Option<Vec<usize>> {
                     return None;
                 }
             }
-            b'B' | b'C' | b'N' | b'O' | b'P' | b'S' | b'F' | b'I' | b'b' | b'c' | b'n' | b'o'
-            | b'p' | b's' | b'*' => starts.push(i),
+            c if crate::forward::starts_atom(c as char) => starts.push(i),
             _ => {}
         }
         i += 1;

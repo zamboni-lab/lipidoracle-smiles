@@ -5,6 +5,9 @@ use std::collections::{HashSet, VecDeque};
 use chematic_core::{AtomIdx, BondOrder, Element, Molecule};
 use chematic_smiles::parse;
 
+use crate::cxsmiles::bracket_bare_wildcards;
+use crate::reverse::{reachable_from, single_bond};
+
 /// Prepares a lipid CXSMILES string for a deterministic depiction.
 ///
 /// An `m:` position-variation block correctly says that a disconnected
@@ -92,7 +95,7 @@ fn preferred_bond(
         .filter(|candidate| !selected.contains(candidate))
         .collect::<HashSet<_>>();
 
-    let excluded = component_atoms(molecule, floating);
+    let excluded = reachable_from(molecule, floating, &HashSet::new());
     let carbonyls = (0..molecule.atom_count())
         .filter(|atom| !excluded.contains(atom) && is_carbonyl_carbon(molecule, *atom))
         .collect::<HashSet<_>>();
@@ -159,10 +162,6 @@ fn site_score(
     )
 }
 
-fn single_bond(order: BondOrder) -> bool {
-    matches!(order, BondOrder::Single | BondOrder::Up | BondOrder::Down)
-}
-
 fn is_carbonyl_carbon(molecule: &Molecule, atom: usize) -> bool {
     molecule.atom(AtomIdx(atom as u32)).element == Element::C
         && molecule
@@ -176,22 +175,6 @@ fn is_carbonyl_carbon(molecule: &Molecule, atom: usize) -> bool {
 fn is_headgroup_atom(molecule: &Molecule, atom: usize) -> bool {
     let element = molecule.atom(AtomIdx(atom as u32)).element;
     element != Element::C && molecule.neighbors(AtomIdx(atom as u32)).count() > 1
-}
-
-fn component_atoms(molecule: &Molecule, start: usize) -> HashSet<usize> {
-    let mut seen = HashSet::new();
-    let mut todo = vec![start];
-    while let Some(atom) = todo.pop() {
-        if !seen.insert(atom) {
-            continue;
-        }
-        todo.extend(
-            molecule
-                .neighbors(AtomIdx(atom as u32))
-                .map(|(neighbor, _)| neighbor.0 as usize),
-        );
-    }
-    seen
 }
 
 fn graph_distance(
@@ -217,26 +200,6 @@ fn graph_distance(
         }
     }
     None
-}
-
-fn bracket_bare_wildcards(smiles: &str) -> String {
-    let mut out = String::with_capacity(smiles.len());
-    let mut in_brackets = false;
-    for ch in smiles.chars() {
-        match ch {
-            '[' => {
-                in_brackets = true;
-                out.push(ch);
-            }
-            ']' => {
-                in_brackets = false;
-                out.push(ch);
-            }
-            '*' if !in_brackets => out.push_str("[*]"),
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

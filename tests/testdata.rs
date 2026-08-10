@@ -398,9 +398,14 @@ fn every_name_survives_the_round_trip() {
         let recovered = smiles2name(cxsmiles)
             .unwrap_or_else(|| panic!("{name}: no name recovered from {cxsmiles}"));
 
+        // Compared canonically, not textually: the reverse direction works in
+        // canonical space, so it may return a different *spelling* of the same
+        // structure. `FA 18:1(6Z);[14-18cy5:1(15)]` comes back as `…(17)`
+        // because a cyclopentene ring is symmetric about the carbon it hangs
+        // from — same molecule, other name for it.
         assert_eq!(
-            name2smiles(&recovered).as_deref(),
-            Some(cxsmiles.as_str()),
+            name2smiles(&recovered).and_then(|s| canonicalize(&s)),
+            canonicalize(cxsmiles),
             "{name}: recovered as {recovered}, which is a different structure"
         );
 
@@ -422,8 +427,20 @@ fn every_name_survives_the_round_trip() {
     assert_eq!(
         inexact,
         [
+            // A cyclopentene ring is symmetric about the carbon it hangs
+            // from, so a double bond at 15-16 and one at 17-18 are the same
+            // molecule under two names.
+            "FA 18:1(6Z);[14-18cy5:1(15)] -> FA 18:1(6Z);[14-18cy5:1(17)]",
             // `cy5` and `cy5:0` are the same ring; the count is written out.
             "FA 20:2(5,8);[11-15cy5;13OH];18OH -> FA 20:2(5,8);[11-15cy5:0;13OH];18OH",
+            // sn-1 and sn-3 are a *stereochemical* distinction, and this
+            // generator writes no stereocenter at glycerol C2 — so the two
+            // primary positions are indistinguishable in the structure and
+            // the reverse direction cannot tell which chain was which. Both
+            // names produce the same molecule. Worth knowing: a `/`-joined
+            // TG or DG asserts an sn-1/sn-3 order its own SMILES does not
+            // actually encode.
+            "TG 16:0/18:0;5Me/18:1(9) -> TG 18:1(9)/18:0;5Me/16:0",
         ],
         "the set of names that lose information changed"
     );
@@ -544,4 +561,75 @@ fn doc_prose_quotes_current_output() {
         "documentation quotes output the generator no longer produces:\n{}",
         stale.join("\n")
     );
+}
+
+// ---------- corpus regeneration ----------
+
+/// Quote a CSV field iff it needs it.
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Notes worth preserving across a rewrite — they say *why* a row is in the
+/// file, which the generator cannot regenerate.
+fn corpus_note(name: &str) -> &'static str {
+    match name {
+        "FA 18:0;ep(5)" => "accepted ;ep(pos) alias for the Table 1A Ep group",
+        _ => "",
+    }
+}
+
+/// Rewrites the generated columns of `name2smiles.csv` and `doc_examples.csv`
+/// from the names already listed there. Run after a *deliberate* encoding
+/// change, then read the diff — that diff is the only review a golden file
+/// ever gets:
+///
+/// ```text
+/// cargo test --test testdata -- --ignored
+/// git diff testdata/
+/// ```
+///
+/// The `name` column is the corpus definition and is never rewritten; add a
+/// case by adding a row with the generated columns left empty. The
+/// hand-written counts in `chains.csv` are never touched — they exist
+/// precisely to be independent of what the code emits.
+#[test]
+#[ignore = "rewrites the checked-in testdata corpus"]
+fn write_testdata_corpus() {
+    for (file, with_note) in [("name2smiles.csv", false), ("doc_examples.csv", true)] {
+        let path = testdata(file);
+        let mut out = String::from(if with_note {
+            "name,cxsmiles,expanded,note\n"
+        } else {
+            "name,cxsmiles,expanded\n"
+        });
+
+        for row in read_csv(file) {
+            let name = &row[0];
+            let cxsmiles = name2smiles(name).unwrap_or_default();
+            let expanded = name2structure(name).map(|s| s.smiles).unwrap_or_default();
+            if cxsmiles.is_empty() {
+                // Not fatal: a row may exist to pin that a name is rejected.
+                println!("  note: {name} produced no structure");
+            }
+            out.push_str(&csv_field(name));
+            out.push(',');
+            out.push_str(&csv_field(&cxsmiles));
+            out.push(',');
+            out.push_str(&csv_field(&expanded));
+            if with_note {
+                out.push(',');
+                out.push_str(&csv_field(corpus_note(name)));
+            }
+            out.push('\n');
+        }
+
+        std::fs::write(&path, out).unwrap_or_else(|e| panic!("write {path:?}: {e}"));
+        println!("rewrote testdata/{file}");
+    }
+    println!("\nnow read the diff: git diff testdata/");
 }

@@ -914,23 +914,32 @@ pub(crate) fn count_atoms(smiles: &str) -> usize {
     let mut chars = smiles.chars();
 
     while let Some(c) = chars.next() {
-        match c {
-            '[' => {
-                count += 1;
-                for c2 in chars.by_ref() {
-                    if c2 == ']' {
-                        break;
-                    }
+        if c == '[' {
+            count += 1;
+            for c2 in chars.by_ref() {
+                if c2 == ']' {
+                    break;
                 }
             }
-            'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'c' | 'n' | 'o' | 's' | 'p' | '*' => {
-                count += 1
-            }
-            _ => {}
+        } else if starts_atom(c) {
+            count += 1;
         }
     }
 
     count
+}
+
+/// Whether `c` begins an atom token outside brackets.
+///
+/// The one definition of the convention. It was written out four times with
+/// three different character sets before this existed, and `insert_padding_atoms`
+/// was the copy that had lost `B`, so a brominated chain padded to the wrong
+/// length.
+pub(crate) fn starts_atom(c: char) -> bool {
+    matches!(
+        c,
+        'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'b' | 'c' | 'n' | 'o' | 's' | 'p' | '*'
+    )
 }
 
 /// Resolves this generator's `Sg:n:pos:var:ht` unlocalized-double-bond
@@ -1095,10 +1104,7 @@ fn insert_padding_atoms(smi: &str, inserts: &[(usize, usize)]) -> String {
             atom_idx += 1;
             continue;
         }
-        if matches!(
-            c,
-            'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'c' | 'n' | 'o' | 's' | 'p' | '*'
-        ) {
+        if starts_atom(c) {
             out.push(c);
             if let Some(&n) = insert_map.get(&atom_idx) {
                 out.extend(std::iter::repeat_n('C', n));
