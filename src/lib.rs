@@ -9,7 +9,7 @@
 //! presenting it as fact.
 //!
 //! ```
-//! use shorthand2smiles::name2smiles;
+//! use lipid_notation::name2smiles;
 //!
 //! // Fully determined -> plain, ordinary SMILES.
 //! assert_eq!(
@@ -21,18 +21,20 @@
 //! // size constraint, never a guessed position.
 //! assert_eq!(
 //!     name2smiles("FA 18:1").as_deref(),
-//!     Some("OC(=O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht| a+b=15")
+//!     Some("OC(=O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht| constrain(a+b=15)")
 //! );
 //! ```
 //!
 //! The presence of a `|...|` tail is itself the signal: **pipes mean
-//! something was undetermined.**
+//! something was undetermined.** The text after the closing pipe is a
+//! `;`-separated list of tokens that are this crate's own, not CXSMILES —
+//! `constrain(a+b=15)` sizes a flexible run, `swappable(sn1,sn2)` says an sn
+//! assignment is one arbitrary choice. See `dev/extension.md`.
 //!
-//! # The two directions
-//!
-//! * [`name2smiles`] — implemented, and the reason this crate exists.
-//! * [`smiles2name`] — **not implemented yet**; always returns `None`. See its
-//!   docs for why it is worth building.
+//! [`smiles2name`] reads that back. The hard part is not SMILES parsing but
+//! *recovering the ambiguity* — mapping `Sg:` runs back to "N declared, K
+//! given" without silently promoting a guess to a determination — so every
+//! answer it gives is re-generated and compared before being returned.
 //!
 //! # Which block means what
 //!
@@ -41,7 +43,7 @@
 //! | *(none)* | geometry undetermined | always — a bare `C=C` already means "cis or trans, not determined" |
 //! | `Sg:` | "the double bond is somewhere in this stretch" | a chain declares more double bonds than it localizes |
 //! | `m:` | "this group attaches somewhere on this chain" | a modification is written with no position (`;OH`) |
-//! | `RG:` | "either chain could be at either position" | chains joined with `_`, and none of them needs `Sg:`/`m:` |
+//! | `$snN$` + `swappable(...)` | "either chain could be at either position" | chains joined with `_` |
 //!
 //! Two CXSMILES constructs are deliberately **not** used. `ctu:` is a query
 //! feature for matching either configuration when searching — a plain `C=C`
@@ -53,13 +55,14 @@
 //! # Depiction
 //!
 //! Stored strings are rigorous, not drawable by every tool: RDKit silently
-//! ignores `Sg:` (handing back a molecule missing most of its chain) and
-//! rejects `RG:` outright. Use [`expand_cxsmiles_for_depiction`] to get a
+//! ignores `Sg:`, handing back a molecule missing most of its chain. Use
+//! [`expand_cxsmiles_for_depiction`] to get a
 //! plain SMILES first, or [`name2structure`] if you also need to know which
 //! atoms belong to which chain.
 //!
 //! [CXSMILES]: https://docs.chemaxon.com/latest/formats_chemaxon-extended-smiles-and-smarts-cxsmiles-and-cxsmarts.html
 
+mod from_smiles;
 mod nomenclature;
 mod smiles;
 
@@ -82,11 +85,12 @@ pub use smiles::{expand_cxsmiles_for_depiction, ChainAtoms, LipidStructure};
 /// first; no structure format can carry a weighted distribution.
 ///
 /// ```
-/// use shorthand2smiles::name2smiles;
+/// use lipid_notation::name2smiles;
 ///
-/// // sn-position unknown -> the chains become R-group alternatives
+/// // sn-position unknown -> the linking atoms are labelled and the trailing
+/// // token says their assignment may be permuted
 /// let s = name2smiles("DG 16:0_18:1(9)").unwrap();
-/// assert!(s.contains("RG:_R1="));
+/// assert!(s.contains("swappable(sn1,sn2)"));
 ///
 /// // unsupported: sum composition only
 /// assert_eq!(name2smiles("PC 34:1"), None);
@@ -95,30 +99,41 @@ pub fn name2smiles(name: &str) -> Option<String> {
     smiles::lipid_name_to_smiles(name)
 }
 
-/// Parses a SMILES/CXSMILES string back into a Shorthand2020 lipid name.
+/// Reads a SMILES/CXSMILES string back into a Shorthand2020 lipid name.
 ///
-/// **Not implemented — always returns `None`.** The signature is fixed and
-/// the tests are written (see `smiles2name_round_trip`, currently
-/// `#[ignore]`d), so filling this in should not disturb any caller.
+/// This inverts [`name2smiles`]; it is not a general SMILES parser, and
+/// returns `None` for a structure this crate would not have written.
 ///
-/// It is worth building for two independent reasons:
+/// **Every answer is proved before it is returned.** The name is fed back
+/// through [`name2smiles`] and must regenerate the input string exactly, so
+/// this can lose coverage but cannot hand back a name meaning something
+/// other than the structure given.
 ///
-/// 1. **Validation.** The forward mapping has no parser-level check that a
-///    string means what the name meant. Round-tripping every name through
-///    SMILES and back would catch index drift, miscounted chains and
-///    malformed blocks in one pass — the class of bug that literal-comparison
-///    tests structurally cannot catch, and that
-///    [`name2smiles`] shipped three of before review caught them.
-/// 2. **Ingestion.** Reading structures produced by other tools is currently
-///    impossible, which rules out using this crate to normalize a
-///    third-party lipid library.
+/// ```
+/// use lipid_notation::{name2smiles, smiles2name};
 ///
-/// The hard part is not SMILES parsing but *recovering the ambiguity*:
-/// mapping `Sg:` runs back to "N declared, K given", and an `m:` candidate
-/// list back to a position-less modification token, without silently
-/// promoting a guess to a determination.
-pub fn smiles2name(_smiles: &str) -> Option<String> {
-    None
+/// let smi = name2smiles("FA 18:1(9Z)").unwrap();
+/// assert_eq!(smiles2name(&smi).as_deref(), Some("FA 18:1(9Z)"));
+///
+/// // Undetermined positions survive the trip: the Sg: run comes back as a
+/// // double bond count with no position, exactly as it went in.
+/// let smi = name2smiles("FA 18:1").unwrap();
+/// assert_eq!(smiles2name(&smi).as_deref(), Some("FA 18:1"));
+///
+/// // Not something this crate wrote.
+/// assert_eq!(smiles2name("c1ccccc1"), None);
+/// ```
+///
+/// # Where the round trip is lossy
+///
+/// [`name2smiles`] is not injective, so the name returned is not always the
+/// name you started from — but it always regenerates the same string:
+///
+/// * a trailing empty slot is dropped, so `DG 16:0/0:0` and `MG 16:0` are the
+///   same string and both return `MG 16:0`;
+/// * older spellings canonicalize — `;ep(5)` returns as `;5Ep`.
+pub fn smiles2name(smiles: &str) -> Option<String> {
+    from_smiles::smiles_to_name(smiles)
 }
 
 /// [`name2smiles`] plus, for every chain, the atom index of each of its
@@ -154,39 +169,5 @@ mod tests {
             name2smiles("FA 18:0").as_deref(),
             Some("OC(=O)CCCCCCCCCCCCCCCCC")
         );
-    }
-
-    #[test]
-    fn smiles2name_is_not_implemented_yet() {
-        // Documents the current state rather than the intended one. Delete
-        // this test — don't edit it — when `smiles2name` lands, and remove
-        // the `#[ignore]` from `smiles2name_round_trip` below.
-        assert_eq!(smiles2name("OC(=O)CCCCCCCCCCCCCCCCC"), None);
-    }
-
-    /// The check `smiles2name` exists to make possible: every name that
-    /// produces a structure must be recoverable from that structure.
-    #[test]
-    #[ignore = "smiles2name not implemented yet"]
-    fn smiles2name_round_trip() {
-        for name in [
-            "FA 18:0",
-            "FA 18:1(9Z)",
-            "FA 18:1(9)",
-            "FA 18:1",
-            "FA 18:0;OH",
-            "FA 18:0;5OH",
-            "PC 16:0/18:1(9)",
-            "PC 16:0_18:1(9)",
-            "TG 16:0/18:1(9)/18:2(9,12)",
-            "Cer d18:1(4)/16:0",
-        ] {
-            let smi = name2smiles(name).unwrap_or_else(|| panic!("{name} should resolve"));
-            assert_eq!(
-                smiles2name(&smi).as_deref(),
-                Some(name),
-                "{name} did not survive the round trip via {smi}"
-            );
-        }
     }
 }

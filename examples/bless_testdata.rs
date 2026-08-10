@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use shorthand2smiles::{name2smiles, name2structure};
+use lipid_notation::{name2smiles, name2structure};
 
 fn testdata(file: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -56,7 +56,7 @@ fn names(path: &Path) -> Vec<String> {
 /// file, which the generator cannot regenerate.
 fn note(name: &str) -> &'static str {
     match name {
-        "FA 18:0;ep(5)" => "KNOWN BUG: epoxide silently dropped, see dev/SMILES.md 4.5",
+        "FA 18:0;ep(5)" => "older ;ep(pos) spelling of the Table 1A Ep group",
         _ => "",
     }
 }
