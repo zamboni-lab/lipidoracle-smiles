@@ -1,13 +1,17 @@
 # lipid_notation
 
 `lipid_notation` converts [Shorthand2020](https://doi.org/10.1194/jlr.S120001025)
-lipid names to SMILES/CXSMILES and back. It preserves structural uncertainty
-instead of choosing positions or chain assignments that were not measured.
+lipid shorthand names to SMILES/CXSMILES and back. It preserves structural
+uncertainty instead of choosing positions or chain assignments that were not
+measured.
+
+It attempts to maximally adhere to CXSMILES standards, and use additional
+tokens to encode the missing information.
 
 ## Quick start
 
 ```rust
-use lipid_notation::{canonicalize, name2smiles, smiles_for_depiction, smiles2name};
+use lipid_notation::{canonicalize, name2smiles, smiles2name, smiles_for_depiction};
 
 // A fully determined structure needs plain SMILES only.
 let determined = name2smiles("FA 18:1(9Z)").unwrap();
