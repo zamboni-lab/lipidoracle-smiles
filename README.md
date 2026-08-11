@@ -77,7 +77,10 @@ Supported classes include:
 
 Chains may carry localized or unlocalized double bonds, geometry, supported
 substituents (according to Liebeisch et al, 2020), epoxides, and cyclic groups. Generic oxygen counts such
-as `;O2` are rejected unless the functional groups are specified.
+as `;O2` are rejected unless the functional groups are specified. A chain
+carrying both a *localized* group and *unlocalized* double bonds is rejected as
+well, because the name does not say how the bonds distribute around the group; see
+[Limitations](#limitations).
 
 ## How ambiguity is encoded in CXSMILES
 
@@ -93,11 +96,11 @@ recovers some of that, but not all of it:
 
 | What the name says | Can SMILES say it? | Can CXSMILES say it? |
 |---|---|---|
-| geometry undetermined (`18:1(9)`) | yes — a bare `C=C` already means it | — |
+| geometry undetermined (`18:1(9)`) | yes: a bare `C=C` already means it | n/a |
 | a double bond somewhere in a stretch (`18:1`) | no | partly: `Sg:` marks the stretch but has nowhere to record its length |
 | a modification on one of many carbons (`;OH`) | no | yes: `m:` position-variation |
 | chains known, sn assignment not (`16:0_18:1`) | no | badly: `RG:` over-generates and cannot coexist with `Sg:` |
-| a weighted call (`Δ9 92%`) | no | no — it goes in the trailer instead |
+| a weighted call (`Δ9 92%`) | no | no; it goes in the trailer instead |
 | sum composition (`PC 34:1`) | no | no |
 
 ### The design rule
@@ -115,7 +118,7 @@ standard field is given a private meaning.
 
 | Encoding | Meaning |
 |---|---|
-| bare `C=C` | double-bond geometry undetermined — SMILES already means this, so nothing is added |
+| bare `C=C` | double-bond geometry undetermined: SMILES already means this, so nothing is added |
 | `Sg:` | a double bond lies somewhere in this stretch |
 | `m:` | this group attaches to one of these candidate atoms |
 | `$snN$` atom labels | this atom is the sn-*N* attachment point |
@@ -134,7 +137,7 @@ something that can carry a second kind of statement:
 | `mPos(OH1:11OH@50,13OH@50)` | the group on the stub labelled `OH1` is at position 11 or 13, evenly split |
 
 `dbPos` and `mPos` carry the bracketed consensus tail that instrument software
-puts after a name — `FA 18:2(9,12) [DB sn1: Δ9 100%, Δ12 88%]`. No structure
+puts after a name, such as `FA 18:2(9,12) [DB sn1: Δ9 100%, Δ12 88%]`. No structure
 format can hold a weighted call, so this used to be stripped and thrown away.
 It is metadata, and the trailer is where this crate's metadata lives, so it is
 carried there instead and `smiles2name` reconstructs the original tail from it.
@@ -149,12 +152,12 @@ original spelling comes back on the way out.
 These tokens only ever *refine* what the structure already says. An entry for a
 position the SMILES commits to records how sure that call was. A set of `|`
 alternatives corresponds to a double bond left inside an `Sg:` run, or a group
-left on an `m:` stub — narrowing "somewhere in this stretch" to "one of these,
+left on an `m:` stub. Narrowing "somewhere in this stretch" to "one of these,
 with these odds" is more information, and still not a determination.
 
 **These tokens are not official CXSMILES.** They sit in what a SMILES reader
 treats as the *title* field, so a toolkit reads them as the molecule's name and
-never as structure — CDK Depict will print them under the picture unless asked
+never as structure. CDK Depict prints them under the picture unless asked
 not to, and RDKit stores them in `_Name` and drops them when it writes the
 molecule out again. Strip the trailer and what remains is still valid CXSMILES
 describing a chemically valid molecule; you lose the lipid semantics, not the
@@ -163,7 +166,7 @@ structure.
 Two rules make the trailer safe to extend:
 
 - **Tokens name things, never positions.** `constrain` names `Sg:` variables,
-  and `swappable`, `dbPos` and `mPos` name `$...$` atom labels — a chain's
+  and `swappable`, `dbPos` and `mPos` name `$...$` atom labels: a chain's
   `snN`, or an `m:` stub's own label. Toolkits maintain those labels across
   canonicalization: renumber the molecule and the label travels with its atom.
   An atom *index* in the trailer would silently rot the first time that
@@ -173,7 +176,7 @@ Two rules make the trailer safe to extend:
   `|...|` block is never empty while the trailer has something to say. That keeps the one-character
   check honest: **pipes mean something was undetermined.**
 
-The same shape extends to anything else worth stating — the grammar is open, and
+The same shape extends to anything else worth stating: the grammar is open, and
 unknown tokens are ignored rather than treated as errors.
 
 ### The roadblocks that forced this
@@ -188,18 +191,18 @@ one shaped the encoding above:
   dropped the sn ambiguity silently. This is why chains are now always written
   into the main string and the sn statement moved to the trailer.
 - **A Markush R-group states the wrong cardinality.** Under the ordinary reading
-  — one label with *N* definitions substitutes each of its sites independently —
+  (one label with *N* definitions substitutes each of its sites independently)
   `PC 16:0_18:1` also admitted `PC 16:0/16:0`, and a TG permitted 27 assignments
   where the name allows 6. Whether a given toolkit reads it that way or pairs
   definitions to sites positionally is itself the problem: nothing in the string
   says which is meant. Labelled positions plus `swappable` are unambiguous.
-- **RDKit does not implement `RG:` at all** — not even the minimal case. Dropping
+- **RDKit does not implement `RG:` at all**, not even the minimal case. Dropping
   it means every string this crate emits now parses in both toolkits.
 - **`Sg:n` has nowhere to record a repeat count.** Hence `constrain(...)`.
 - **`m:` candidate lists cannot see inside `Sg:` runs.** A chain with both an
   unlocalized modification and unlocalized double bonds can only offer the atoms
   physically present in the string, so the candidate list understates the
-  ambiguity — the safer direction, but still not the truth.
+  ambiguity, which is the safer direction but still not the truth.
 - **`ctu:` and `f:` look applicable and are not.** `ctu:` is a *query* feature
   for matching either geometry, and a bare `C=C` already says as much about a
   structure; `f:` groups components into one entity and expresses *and*, never
@@ -209,8 +212,7 @@ one shaped the encoding above:
   call are written identically in the structure. The percentages are not lost:
   they move to `dbPos`/`mPos` trailer tokens, which name the chain or the `m:`
   stub they refer to and never touch a CXSMILES field.
-- **No construct varies a bond order within a structure**, which is why sum
-  compositions such as `PC 34:1` are rejected rather than guessed.
+
 
 ### Examples
 
@@ -220,8 +222,8 @@ Fully determined, so plain SMILES with no tail at all:
 FA 18:1(9Z)  →  OC(=O)CCCCCCC/C=C\CCCCCCCC
 ```
 
-One double bond, position not determined — a flexible run plus its length,
-never a guessed position:
+One double bond, position not determined, so a flexible run plus its length
+rather than a guessed position:
 
 ```
 FA 18:1  →  OC(=O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht| constrain(a+b=15)
@@ -241,7 +243,7 @@ PC 16:0_18:1(9)
 → C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CCCCCCCC=CCCCCCCCC)COC(=O)CCCCCCCCCCCCCCC |$;;…;sn2;;…;sn1$| swappable(sn1,sn2)
 ```
 
-And the case that motivated the whole design — an unlocalized double bond *and*
+And the case that motivated the whole design: an unlocalized double bond *and*
 an unresolved sn assignment, which the `RG:` encoding could not state together:
 
 ```
@@ -250,8 +252,8 @@ PC 16:0_18:1
 ```
 
 Worth noting: each chain gets its own equation, and equations are matched to
-`Sg:` markers *positionally*, in emission order rather than by variable name —
-variable letters restart per chain and can repeat. A fully determined chain
+`Sg:` markers *positionally*, in emission order rather than by variable name.
+Variable letters restart per chain and can repeat. A fully determined chain
 contributes no equation at all.
 
 `canonicalize` canonicalizes the molecular graph and updates every
@@ -263,6 +265,42 @@ function twice returns the same string.
 not depend on the exact atom or branch order produced by `name2smiles`. Before
 returning a name, it regenerates the structure and verifies canonical CXSMILES
 equivalence.
+
+#### Where name and string are not exactly interchangeable
+
+A name that converts always yields a string that regenerates it, but the two
+are not word-for-word equivalents. Round-tripping preserves the structure and
+the ambiguity while normalizing the spelling to one form:
+
+| Input | Recovered |
+|---|---|
+| `FA 18:0;ep(5)` | `FA 18:0;5Ep` |
+| `FA 18:2;OH;OH` | `FA 18:2;(OH)2` |
+| `CL 16:0/18:1(9)/18:2(9,12)/18:0` | `CL 18:2(9,12)/18:0/16:0/18:1(9)`; the two phosphatidyl halves are exchangeable across the central glycerol, so one ordering is chosen |
+| `ST 27:1(5);3OH` | `ST`; the sterol form is chain-free, and the ring detail is implied by the class rather than carried in the name |
+
+Compare canonical CXSMILES, not name strings, when testing equivalence.
+
+Three further places where the string carries slightly more or less than the
+name did:
+
+**A `m:` candidate list understates ambiguity on a chain that also has `Sg:`
+runs.** `FA 18:2;OH` emits `m:9:3.4.5.6.7.8`, six candidate carbons for a
+hydroxyl that could sit on any of C2–C18. A `m:` list can only name atoms
+physically present in the string, and the carbons hidden inside the flexible
+runs are not. The error is in the safe direction (a reader concludes less than
+the truth, never more), but it is still not the truth. The chain length in
+`constrain(...)` is what tells you the list is partial.
+
+**Confidence percentages never enter the structure.** `FA 18:2(9,12) [DB sn1:
+Δ9 100%, Δ12 88%]` produces a fully committed SMILES plus
+`dbPos(sn1:9@100,12@88)`. Strip the trailer, as any toolkit round-trip does,
+and a 88% call is indistinguishable from a determination.
+
+**`smiles2name` is not a general structure-to-name engine.** It recognizes
+structures that match this crate's own templates. A valid lipid drawn some other
+way, or a molecule outside the supported classes, returns `None` even when it is
+chemically fine.
 
 ## Depiction and toolkit behavior
 
@@ -281,22 +319,41 @@ into a measurement.
 Round-tripping a stored string through a toolkit is lossy in a way worth
 knowing about: the `|...|` block survives and is renumbered correctly, but the
 trailer is a title and is dropped. A string that went in carrying
-`constrain(a+b=15)` comes back with its `Sg:` markers intact and no length —
+`constrain(a+b=15)` comes back with its `Sg:` markers intact and no length:
 still well-formed, quietly less specific. Preserve the trailer yourself if a
 toolkit rewrites the molecule.
 
 ## Limitations
 
-- Carbohydrate sequences such as `Gal-Glc-Cer` do not determine glycosidic
-  linkage positions and are not converted.
-- A functional group on C1 of an acyl chain can change the linkage itself and
-  is rejected.
-- Confidence percentages never enter the structure. They are carried in the
-  trailer as `dbPos`/`mPos` tokens and restored by `smiles2name`.
-- `smiles2name` recognizes structures within this crate's supported lipid
-  templates; it is not a general structure-to-name engine.
-- Some equivalent input names normalize to one spelling during reverse
-  conversion, such as `;ep(5)` to `;5Ep`.
+These names are refused: conversion returns `None` rather than inventing a
+structure. The demo gallery (`cargo test --test demo -- --ignored`) renders the
+same list. For names that *do* convert but whose string is not a word-for-word
+equivalent of the name, see
+[Where name and string are not exactly interchangeable](#where-name-and-string-are-not-exactly-interchangeable).
+
+| Input | Why |
+|---|---|
+| `PC 34:1`, `TG 54:3` | Sum composition. Many chain combinations match, and picking one would be a fabrication. `class_needs_multi_chain` reports which classes this applies to. |
+| `FA 18:1(9);O2` | A generic oxygen count names no functional group. Two oxygens could be two hydroxyls, a hydroperoxide, an epoxide plus a hydroxyl, or a ketone plus a hydroxyl. These are different molecules, not different positions of one molecule, so no `m:` block can cover them. Name the groups (`;(OH)2`, `;9Ep;OH`) and the oxygen count is no longer the obstacle. |
+| `FA 18:0;1OMe`, `FA 18:1(9);1OH` | A group on C1 sits on the carboxyl carbon and redefines the linkage itself rather than decorating the chain. The result would no longer be the acyl species the class implies. |
+| `Gal-Glc-Cer d18:1(4)/16:0` | A glycan sequence names the sugars and their order but not the glycosidic linkage positions or anomeric configurations. Those are bonds, not annotations, and there is nowhere in the string to leave them open. |
+| `DG 16:0/18:1(9)/0:0` | `0:0` marks a vacant sn position in some dialects; this crate expects the vacancy to be expressed by the class (`DG` with two chains). |
+| `FA 18:2;9OH`, `FA 18:2;9Ep`, `FA 19:1;[11-13cy3:0]` | A localized modification, epoxide, or ring combined with unlocalized double bonds. It's impossible to determine how many double bonds sit on which side of the fixed group. |
+
+**A note on the last example: `FA 18:2;9OH`.** The molecule expressed by this shorthand name is a very unlikely result of an MS2 experiment. Assigning a `-OH` position implies that the number of C and H on both sides have been identified. Hence, the number of double bonds on both sides will be known. This could be easily expressed with `Sg:` blocks on both sides of the `-OH` fixed at C9. For the case of one C=C on both sides, the corresponding CXSMILES is
+```
+FA 18:2;9OH (one C=C is located on either sides of the -OH group)
+→ OC(=O)CC=CCC(O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht,Sg:n:9:c:ht,Sg:n:12:d:ht| constrain(a+b=5);constrain(c+d=7)
+```
+This is a plausible results of a MS2 experiment. However, it can't be spelled out in shorthand notation. This is a (rare) limitation of the compact notation. Accordingly, `smiles2name` returns `None` for that string, since there is no name equivalent to it, and `name2smiles` returns `None` for `FA 18:2;9OH`, rather than emitting one arbitrary distribution of the two double bonds.
+
+The rejection triggers only when the ambiguity is real: when there is room for
+a double bond in front of the fixed group as well as behind it. A group close
+enough to C1 leaves no such room, so exactly one distribution is consistent with
+the name and the string is exact: `FA 18:2;3OH` converts. So do names that
+resolve the question by localizing the double bonds (`FA 18:2(11,14);9OH`), the
+same group on a saturated chain (`FA 18:0;9OH`), and unlocalized double bonds on
+an unmodified chain (`FA 18:2`).
 
 ## Development
 
@@ -313,7 +370,7 @@ The test corpus is stored in `testdata/`:
 - `doc_examples.csv` pins documentation examples.
 
 After an intentional output-format change, run
-`cargo run --example bless_testdata` and review the corpus diff. For external
+`cargo test --test testdata -- --ignored` and review the corpus diff. For external
 toolkit validation, install RDKit and run:
 
 ```bash
@@ -338,8 +395,8 @@ CDK Depict for each representable example.
 MIT
 
 ## References
-- **Lipid shorthand and ID levels** — Liebisch G, et al. *Update on LIPID MAPS
+- **Lipid shorthand and ID levels**: Liebisch G, et al. *Update on LIPID MAPS
   classification, nomenclature, and shorthand notation for MS-derived lipid
   structures.* J Lipid Res, 2020;61(12):1539–1555.
-  [doi:10.1194/jlr.S120001025](https://doi.org/10.1194/jlr.S120001025) —
+  [doi:10.1194/jlr.S120001025](https://doi.org/10.1194/jlr.S120001025).
   Tables 1A/1B/1C are the modification and ring vocabulary of §1.3.

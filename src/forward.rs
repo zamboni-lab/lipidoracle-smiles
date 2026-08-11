@@ -629,6 +629,31 @@ fn build_chain_segment(
         return None;
     }
 
+    // A localized modification or ring pins a chain carbon and splits the
+    // chain into a proximal and a distal segment. The flexible run below only
+    // ever covers what follows the last pinned feature, so every unlocalized
+    // double bond would be committed to the distal segment — a claim the name
+    // never made. Shorthand has no syntax for how the bonds distribute across
+    // the split (`18:2;9OH` states a total and nothing else), so there is no
+    // name to fall back to and no honest string to emit. Refusing beats
+    // silently narrowing the name.
+    //
+    // A pin close enough to the start leaves no room for a double bond before
+    // it, so only one distribution is consistent and the string is exact.
+    if unlocalized_count > 0 {
+        let first_pin = known_mods
+            .iter()
+            .map(|m| m.pos)
+            .chain(rings.iter().map(|r| r.start))
+            .min();
+        // C1 of an acyl chain is the carbonyl and can never carry a double
+        // bond, so the first bond-capable carbon sits one further along.
+        let first_free = if carbonyl_c1 { start + 1 } else { start };
+        if first_pin.is_some_and(|pin| pin > first_free + 1) {
+            return None;
+        }
+    }
+
     let mut smiles;
     let mut sg_blocks = Vec::new();
     let mut constraint = None;
@@ -2618,9 +2643,19 @@ mod tests {
 
     #[test]
     fn hydroxyl_with_unlocalized_double_bond() {
-        // FA with localized hydroxyl but unlocalized double bond
-        let s =
-            generate_smiles("FA 18:2;5OH").expect("unlocalized DB with localized OH should work");
+        // A hydroxyl far enough along the chain to leave room for a double
+        // bond on either side of it. The name does not say how the two bonds
+        // distribute across the split and no CXSMILES this generator writes
+        // can leave that open, so the only honest answer is to refuse.
+        assert!(
+            generate_smiles("FA 18:2;5OH").is_none(),
+            "a localized group that splits the chain must be rejected"
+        );
+
+        // The same group on C3 pins nothing: there is no room for a double
+        // bond before it, so the flexible run after it is the whole story.
+        let s = generate_smiles("FA 18:2;3OH")
+            .expect("a group with no room in front of it should still resolve");
         assert_balanced(&s);
         assert!(s.contains("C(O)"), "hydroxyl should be present");
         assert!(
@@ -2776,7 +2811,7 @@ mod tests {
         assert_eq!(phytanic.matches("C(C)").count(), 4, "{phytanic}");
         assert_chain_map_sane("FA 16:0;3Me,7Me,11Me,15Me", &[(1, 16)]);
 
-        let mixed = generate_smiles("FA 20:3(5Z,13E);11OH,15OH;9oxo").expect("should resolve");
+        let mixed = generate_smiles("FA 20:3(5Z,13E,17E);11OH,15OH;9oxo").expect("should resolve");
         assert_eq!(mixed.matches("C(O)").count(), 2, "{mixed}");
         assert_eq!(
             mixed.matches("C(=O)").count(),

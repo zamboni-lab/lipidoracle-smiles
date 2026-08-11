@@ -74,12 +74,12 @@ const EXAMPLES: &[Example] = &[
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
-        shorthand: "PC 16:1_18:2;9Ep;OH",
+        shorthand: "PC 16:1_18:2(11,14);9Ep;OH",
         valid: true,
     },
     Example {
         group: "Combined rings, groups, and uncertainty",
-        shorthand: "TG 18:1(9);5OH_18:2;9Ep_18:1",
+        shorthand: "TG 18:1(9);5OH_18:2(11,14);9Ep_18:1",
         valid: true,
     },
     Example {
@@ -175,6 +175,16 @@ const EXAMPLES: &[Example] = &[
     Example {
         group: "Intentionally unsupported shorthand",
         shorthand: "Gal-Glc-Cer d18:1(4)/16:0",
+        valid: false,
+    },
+    Example {
+        group: "Intentionally unsupported shorthand",
+        shorthand: "FA 18:2;9OH",
+        valid: false,
+    },
+    Example {
+        group: "Intentionally unsupported shorthand",
+        shorthand: "TG 18:1(9);5OH_18:2;9Ep_18:1",
         valid: false,
     },
 ];
