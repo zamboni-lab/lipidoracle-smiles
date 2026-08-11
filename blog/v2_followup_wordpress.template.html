@@ -1,0 +1,289 @@
+<h1>Structural ambiguity in lipidomics, the honest version</h1>
+
+<p>A few weeks ago I published a post about expressing structural ambiguity in CXSMILES. John Mayfield, who maintains much of the CDK support for CXSMILES, was kind enough to read it and point out where I had it wrong. He was right, and in several places. This is the correction.</p>
+
+<p>I am not going to defend the old notation. The old post proposed four CXSMILES devices: <code>ctu:</code> for unknown double-bond geometry, <code>f:</code> for unresolved sn assignment, <code>Sg:</code> with a raw <code>a+b=15</code> constraint for unknown double-bond position, and <code>m:</code> for unknown modification position. The first three were wrong in ways that matter, and the confidence handling was throwing information away. Let me go through each.</p>
+
+<h2>What the first version got wrong</h2>
+
+<h3><code>ctu:</code> is a query feature, not a structure declaration</h3>
+
+<p>CXSMILES has a <code>ctu:</code> field, and it looks exactly like what you want for "this double bond could be cis or trans". But <code>ctu:</code> is a query feature. It exists so a search can match either geometry. It is not a statement about a structure. A bare <code>C=C</code> in SMILES already means the geometry is undetermined. Writing <code>ctu:</code> on top of it was redundant, and it told a reader the wrong thing about what the string was.</p>
+
+<p>In the new format we simply leave the bond alone. <code>FA 18:1(9)</code> produces a plain <code>C=C</code>, which every SMILES reader already understands. Nothing is added.</p>
+
+<h3><code>f:</code> had the wrong cardinality, and RDKit does not implement it</h3>
+
+<p>The old encoding put unresolved sn assignment into <code>f:0.1.2</code>, a CXSMILES fragment group. Three things were wrong with that.</p>
+
+<p>First, the fragment grouping reads as an R-group, and an R-group states the wrong cardinality. Under the ordinary Markush reading, one label with N definitions substitutes each of its sites independently. So <code>PC 16:0_18:1</code> would also admit <code>PC 16:0/16:0</code>, and a TG permitted 27 assignments where the name allows 6. Nothing in the string said whether definitions are substituted independently or paired positionally.</p>
+
+<p>Second, an <code>RG:</code> definition cannot contain a nested <code>|...|</code> block. CDK rejects it. So a chain that needed an <code>Sg:</code> or <code>m:</code> block of its own could never be an R-group alternative. That forced a choice between saying the double bond was unlocalized and saying the sn assignment was unresolved. The old encoding kept the double bond and dropped the sn ambiguity silently.</p>
+
+<p>Third, RDKit does not implement <code>RG:</code> at all, not even the minimal case. Any string we emitted with <code>f:</code> would parse in CDK but fail in RDKit.</p>
+
+<p>The fix is to stop grouping fragments. The chains are written directly into the main string, each chain gets an atom label, and the sn statement moves to the trailer. I will show this below.</p>
+
+<h3>The raw constraint was not a feature</h3>
+
+<p>The old format wrote the chain-length constraint as a raw expression after the pipes: <code>a+b=15</code>. This borrowed the look of a CDK cookbook size constraint, but it was not a defined CXSMILES feature. A reader could not know what it meant, and it was easy to confuse with something a toolkit would interpret as a name.</p>
+
+<p>The new format wraps it in an explicit token: <code>constrain(a+b=15)</code>. It says clearly what it is, and it lives where every non-standard statement lives now, after the pipes in the trailer.</p>
+
+<h3>Confidence was thrown away</h3>
+
+<p>The old post argued that confidence should not go into CXSMILES, and used a <code>~</code> notation in the name such as <code>18:1(9~80%,11~20%)</code>. But when the structure was built, the consensus tail was stripped and discarded. The percentages survived only in the name column.</p>
+
+<p>The new format keeps the consensus. It moves into the trailer as <code>dbPos(...)</code> and <code>mPos(...)</code> tokens, and <code>smiles2name</code> reconstructs the original bracketed tail from them. Nothing is thrown away anymore.</p>
+
+<h2>The design rule</h2>
+
+<p>The whole revision reduces to one rule:</p>
+
+<blockquote><p>Everything the standard covers goes inside the pipes, correct and complete. Everything it does not goes after them, where no toolkit can mistake it for structure.</p></blockquote>
+
+<p style="text-align:center;"><svg xmlns="http://www.w3.org/2000/svg" width="820" height="300" viewBox="0 0 820 300" font-family="Arial, Helvetica, sans-serif">
+  <rect x="0" y="0" width="820" height="300" fill="#ffffff" stroke="#cccccc" rx="8"/>
+  <rect x="24" y="30" width="368" height="210" fill="#e8f5e9" stroke="#2e7d32" rx="8"/>
+  <rect x="24" y="30" width="368" height="36" fill="#2e7d32" rx="8"/>
+  <text x="208" y="53" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">INSIDE THE PIPES</text>
+  <text x="208" y="86" text-anchor="middle" fill="#2e7d32" font-size="13">standard CXSMILES</text>
+  <text x="52" y="120" fill="#1b5e20" font-size="14">bare C=C</text>
+  <text x="200" y="120" fill="#444" font-size="13">geometry undetermined</text>
+  <text x="52" y="152" fill="#1b5e20" font-size="14">Sg:</text>
+  <text x="200" y="152" fill="#444" font-size="13">double bond somewhere in a stretch</text>
+  <text x="52" y="184" fill="#1b5e20" font-size="14">m:</text>
+  <text x="200" y="184" fill="#444" font-size="13">group on one of these atoms</text>
+  <text x="52" y="216" fill="#1b5e20" font-size="14">sn label</text>
+  <text x="200" y="216" fill="#444" font-size="13">sn attachment point label</text>
+  <text x="208" y="252" text-anchor="middle" fill="#2e7d32" font-size="13" font-style="italic">A toolkit parses this as a molecule.</text>
+
+  <rect x="428" y="30" width="368" height="210" fill="#e3f2fd" stroke="#1565c0" rx="8"/>
+  <rect x="428" y="30" width="368" height="36" fill="#1565c0" rx="8"/>
+  <text x="612" y="53" text-anchor="middle" fill="#ffffff" font-size="16" font-weight="bold">AFTER THE PIPES</text>
+  <text x="612" y="86" text-anchor="middle" fill="#1565c0" font-size="13">the trailer, in the title field</text>
+  <text x="456" y="120" fill="#0d47a1" font-size="14">constrain(a+b=15)</text>
+  <text x="456" y="152" fill="#0d47a1" font-size="14">swappable(sn1,sn2)</text>
+  <text x="456" y="184" fill="#0d47a1" font-size="14">dbPos(sn1:9@92)</text>
+  <text x="456" y="216" fill="#0d47a1" font-size="14">mPos(OH1:11OH@50,13OH@50)</text>
+  <text x="612" y="252" text-anchor="middle" fill="#1565c0" font-size="13" font-style="italic">A toolkit treats this as a name, never as structure.</text>
+
+  <text x="410" y="196" text-anchor="middle" fill="#555" font-size="13" transform="rotate(90 410 150)">the pipes</text>
+</svg>
+</p>
+
+<p>The part before and inside <code>|...|</code> is ordinary, conformant CXSMILES. A toolkit that knows nothing about lipids parses it, renders it, and gets a chemically valid molecule. Nothing lipid-specific is smuggled into a standard field, and no standard field is given a private meaning.</p>
+
+<p>The part after the closing pipe is the title field. A SMILES reader treats a title as the molecule's name, never as structure. CDK Depict prints it under the picture unless asked not to. RDKit stores it in <code>_Name</code> and drops it when it writes the molecule out again. Strip the trailer and what remains is still valid CXSMILES describing a chemically valid molecule. You lose the lipid semantics, not the structure.</p>
+
+<h2>Inside the pipes now</h2>
+
+<table>
+<thead><tr><th>Encoding</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>bare <code>C=C</code></td><td>double-bond geometry undetermined, nothing added</td></tr>
+<tr><td><code>Sg:</code></td><td>a double bond lies somewhere in this stretch</td></tr>
+<tr><td><code>m:</code></td><td>this group attaches to one of these candidate atoms</td></tr>
+<tr><td><code>$snN$</code></td><td>this atom is the sn-N attachment point</td></tr>
+</tbody>
+</table>
+
+<p>These are all standard CXSMILES. The only things that changed are that <code>ctu:</code> and <code>f:</code> are gone, and the chains now live in the main string instead of in grouped fragments.</p>
+
+<h2>After the pipes: the trailer</h2>
+
+<p>The trailer is a <code>;</code>-separated list of <code>name(argument)</code> tokens.</p>
+
+<table>
+<thead><tr><th>Token</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>constrain(a+b=15)</code></td><td>the <code>Sg:</code> runs marked a and b span 15 carbons between them</td></tr>
+<tr><td><code>swappable(sn1,sn2)</code></td><td>the chains at these labelled positions may be exchanged</td></tr>
+<tr><td><code>dbPos(sn1:9@92)</code></td><td>the double bond at Δ9 on sn-1 was called with 92% confidence</td></tr>
+<tr><td><code>mPos(OH1:11OH@50,13OH@50)</code></td><td>the group on the stub labelled OH1 is at position 11 or 13, evenly split</td></tr>
+</tbody>
+</table>
+
+<p>Two rules make the trailer safe to extend.</p>
+
+<p>Tokens name things, never positions. <code>constrain</code> names <code>Sg:</code> variables. <code>swappable</code>, <code>dbPos</code>, and <code>mPos</code> name <code>$...$</code> atom labels. A chain's <code>snN</code>, or an <code>m:</code> stub's own label. Toolkits maintain those labels across canonicalization, so renumbering the molecule does not rot the token. An atom index in the trailer would silently go stale the first time that happened, because nothing rewrites the title field.</p>
+
+<p>Anything stated in the trailer is anchored in the pipes. A <code>swappable</code>, <code>dbPos</code>, or <code>mPos</code> token always comes with the <code>$...$</code> labels it names, so the <code>|...|</code> block is never empty while the trailer has something to say. That keeps a one-character check honest: pipes mean something was undetermined.</p>
+
+<h2>The examples, redone</h2>
+
+<p>Let me go through the examples from the old post and show them in the new format. Every string in this section is the actual output of the converter.</p>
+
+<h3>Fully determined</h3>
+
+<p><img src="{{BASE64:fig_fa181z}}" alt="FA 18:1(9Z)" style="max-width:100%;height:auto;" /></p>
+
+<p><code>FA 18:1(9Z)</code> is fully determined, so it is plain SMILES with no pipes and no trailer:</p>
+
+<pre><code>FA 18:1(9Z)  →  OC(=O)CCCCCCC/C=C\CCCCCCCC</code></pre>
+
+<p>There is nothing to encode. The geometry is in the bond slashes.</p>
+
+<h3>Unknown double-bond position</h3>
+
+<p><img src="{{BASE64:fig_fa181}}" alt="FA 18:1" style="max-width:100%;height:auto;" /></p>
+
+<p><code>FA 18:1</code> has one double bond that is somewhere in the chain but not localized. The string marks the variable stretch with <code>Sg:</code> and records its length in the trailer:</p>
+
+<pre><code>FA 18:1  →  OC(=O)CC=CC |Sg:n:3:a:ht,Sg:n:6:b:ht| constrain(a+b=15)</code></pre>
+
+<p>The <code>Sg:n:</code> entries mark variable-length segments. The <code>constrain(a+b=15)</code> keeps the total number of carbons correct. The structure says "one double bond somewhere in an 18-carbon acyl chain", not "a double bond at the position used by this drawing".</p>
+
+<p><img src="{{BASE64:fig_fa182}}" alt="FA 18:2" style="max-width:100%;height:auto;" /></p>
+
+<p>Two unlocalized double bonds:</p>
+
+<pre><code>FA 18:2  →  OC(=O)CC=CC=CC |Sg:n:3:a:ht,Sg:n:5:b:ht,Sg:n:8:c:ht| constrain(a+b+c=14)</code></pre>
+
+<p><img src="{{BASE64:fig_fa204}}" alt="FA 20:4" style="max-width:100%;height:auto;" /></p>
+
+<p>Four:</p>
+
+<pre><code>FA 20:4  →  OC(=O)CC=CC=CC=CC=CC |Sg:n:3:a:ht,Sg:n:5:b:ht,Sg:n:7:c:ht,Sg:n:9:d:ht,Sg:n:12:e:ht| constrain(a+b+c+d+e=14)</code></pre>
+
+<p>The pattern is simple. A chain with N unlocalized double bonds needs N+1 variable regions. The sum constraint preserves the chain length.</p>
+
+<p><img src="{{BASE64:fig_pc160_182}}" alt="PC 16:0/18:2" style="max-width:100%;height:auto;" /></p>
+
+<p>The same idea works inside a connected lipid. <code>PC 16:0/18:2</code> has resolved sn positions and a resolved chain split, but the double bonds in the 18:2 chain are not localized:</p>
+
+<pre><code>PC 16:0/18:2  →  C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CC=CC=CC)COC(=O)CCCCCCCCCCCCCCC |Sg:n:16:a:ht,Sg:n:18:b:ht,Sg:n:21:c:ht| constrain(a+b+c=14)</code></pre>
+
+<h3>Unknown modification position</h3>
+
+<p><img src="{{BASE64:fig_fa180_oh}}" alt="FA 18:0;OH" style="max-width:100%;height:auto;" /></p>
+
+<p><code>FA 18:0;OH</code> has a hydroxyl that is present but not placed. It is a disconnected stub whose <code>m:</code> block lists every carbon it could sit on:</p>
+
+<pre><code>FA 18:0;OH  →  OC(=O)CCCCCCCCCCCCCCCCC.*O |m:20:3.4.5.6.7.8.9.10.11.12.13.14.15.16.17.18.19|</code></pre>
+
+<p>The modification is an attachment ambiguity, not a variable-length stretch, so it is not an <code>Sg:</code>.</p>
+
+<h3>Unresolved sn assignment</h3>
+
+<p><img src="{{BASE64:fig_pc160_181_sn}}" alt="PC 16:0_18:1(9)" style="max-width:100%;height:auto;" /></p>
+
+<p><code>PC 16:0_18:1(9)</code> has both chains and the double-bond position known, but not which chain is on sn-1 and which on sn-2. Both chains are in the main string. Each linking atom carries an <code>snN</code> label, and the trailer says they can be swapped:</p>
+
+<pre><code>PC 16:0_18:1(9)  →  C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CCCCCCCC=CCCCCCCCC)COC(=O)CCCCCCCCCCCCCCC |$;;;;;;;;;;;;;sn2;;;;;;;;;;;;;;;;;;;;;sn1$| swappable(sn1,sn2)</code></pre>
+
+<h3>The case that motivated the whole design</h3>
+
+<p><img src="{{BASE64:fig_pc160_181}}" alt="PC 16:0_18:1" style="max-width:100%;height:auto;" /></p>
+
+<p>Now the hard one. <code>PC 16:0_18:1</code> has both an unlocalized double bond in the 18:1 chain and an unresolved sn assignment. The old <code>f:</code> encoding could not state both at once. The new one can, because the chains are in the main string and the two statements live in different places:</p>
+
+<pre><code>PC 16:0_18:1  →  C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CC=CC)COC(=O)CCCCCCCCCCCCCCC |$;;;;;;;;;;;;;sn2;;;;;;;;sn1$,Sg:n:16:a:ht,Sg:n:19:b:ht| swappable(sn1,sn2);constrain(a+b=15)</code></pre>
+
+<p>Two things worth noting. Each chain gets its own equation, and equations are matched to <code>Sg:</code> markers positionally, in emission order, not by variable name. Variable letters restart per chain and can repeat. A fully determined chain contributes no equation at all.</p>
+
+<p><img src="{{BASE64:fig_dg_combined}}" alt="DG 18:1(9);OH(5)_18:1;OH" style="max-width:100%;height:auto;" /></p>
+
+<p>The same machinery handles a glycerolipid with everything at once. <code>DG 18:1(9);OH(5)_18:1;OH</code> has an unresolved sn assignment, one chain with a localized double bond and a localized hydroxyl, and the other chain with an unlocalized double bond and an unlocalized hydroxyl:</p>
+
+<pre><code>DG 18:1(9);OH(5)_18:1;OH
+→ C(CO)(OC(=O)CC=CC.*O)COC(=O)CCCC(O)CCCC=CCCCCCCCC |$;;;sn2;;;;;;;;;;sn1$,Sg:n:6:a:ht,Sg:n:9:b:ht,m:10:6.7.8.9| swappable(sn1,sn2);constrain(a+b=15)</code></pre>
+
+<p>This one string says several things at once: the chains may be swapped (<code>swappable</code>), one chain has an unlocalized double bond (<code>Sg:</code>), the other has an unlocalized hydroxyl (<code>m:</code>), and the variable stretch spans 15 carbons (<code>constrain</code>).</p>
+
+<h3>Confidence in the trailer</h3>
+
+<p><img src="{{BASE64:fig_fa181_conf}}" alt="FA 18:1(9) [DB sn1: Δ9 92%]" style="max-width:100%;height:auto;" /></p>
+
+<p>The bracketed consensus tail that instrument software puts after a name used to be thrown away. It is not anymore. <code>FA 18:1(9) [DB sn1: Δ9 92%]</code> keeps the structure byte-identical to the version without a tail, and carries the call in the trailer:</p>
+
+<pre><code>FA 18:1(9) [DB sn1: Δ9 92%]  →  OC(=O)CCCCCCCC=CCCCCCCCC |$;sn1$| dbPos(sn1:9@92)</code></pre>
+
+<p><img src="{{BASE64:fig_fa204_oh_conf}}" alt="FA 20:4;OH [OH sn1: 11 50%, 13 50%]" style="max-width:100%;height:auto;" /></p>
+
+<p>An unlocalized group with a split call narrows the <code>m:</code> block from "any carbon" to two candidates. <code>FA 20:4;OH [OH sn1: 11 50%, 13 50%]</code>:</p>
+
+<pre><code>FA 20:4;OH [OH sn1: 11 50%, 13 50%]
+→ OC(=O)CC=CC=CC=CC=CC.*O |$;sn1;;;;;;;;;;;;OH1$,Sg:n:3:a:ht,Sg:n:5:b:ht,Sg:n:7:c:ht,Sg:n:9:d:ht,Sg:n:12:e:ht,m:13:3.4.5.6.7.8.9.10.11.12| constrain(a+b+c+d+e=14);mPos(OH1:11OH@50,13OH@50)</code></pre>
+
+<p>The <code>|</code> inside <code>mPos</code> separates mutually exclusive candidates: position 11 or position 13, not both. The original bracketed tail is reconstructed on the way back out by <code>smiles2name</code>.</p>
+
+<h3>Three chains</h3>
+
+<p><img src="{{BASE64:fig_tg_3chain}}" alt="TG 18:0_18:1_18:2" style="max-width:100%;height:auto;" /></p>
+
+<p>The framework scales to triacylglycerols. <code>TG 18:0_18:1_18:2</code>:</p>
+
+<pre><code>TG 18:0_18:1_18:2  →  C(COC(=O)CC=CC=CC)(OC(=O)CC=CC)COC(=O)CCCCCCCCCCCCCCCCC |$;;sn3;;;;;;;;;sn2;;;;;;;;sn1$,Sg:n:5:a:ht,Sg:n:7:b:ht,Sg:n:10:c:ht,Sg:n:14:d:ht,Sg:n:17:e:ht| swappable(sn1,sn2,sn3);constrain(a+b+c=14);constrain(d+e=15)</code></pre>
+
+<p>The two constraints are separate because they belong to different chains. <code>a+b+c=14</code> is the 18:2 chain, <code>d+e=15</code> is the 18:1 chain.</p>
+
+<h2>The demo</h2>
+
+<p>The repository ships a runnable demo that exercises all of this and more. It covers fully determined structures, unlocalized features, rings, epoxides, ceramides, O-alkyl ethers, and headgroup diversity, and it renders every structure through CDK Depict. A few of the more demanding examples:</p>
+
+<p><img src="{{BASE64:fig_demo_tg_epoxide}}" alt="TG 18:1(9);5OH_18:2;9Ep_18:1" style="max-width:100%;height:auto;" /></p>
+
+<pre><code>TG 18:1(9);5OH_18:2;9Ep_18:1
+→ C(COC(=O)CC=CC)(OC(=O)CCCCCCCC%10OC%10CC=CC=CC)COC(=O)CCCC(O)CCCC=CCCCCCCCC |$;;sn3;;;;;;;sn2;;;;;;;;;;;;;;;;;;;;sn1$,Sg:n:5:a:ht,Sg:n:8:b:ht,Sg:n:22:c:ht,Sg:n:24:d:ht,Sg:n:27:e:ht| swappable(sn1,sn2,sn3);constrain(a+b=15);constrain(c+d+e=5)</code></pre>
+
+<p><img src="{{BASE64:fig_demo_pc_ether}}" alt="PC O-16:1_18:2;OH" style="max-width:100%;height:auto;" /></p>
+
+<pre><code>PC O-16:1_18:2;OH
+→ C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CC=CC=CC.*O)COCCC=CC |$;;;;;;;;;;;;;sn2;;;;;;;;;;;;sn1$,Sg:n:16:a:ht,Sg:n:18:b:ht,Sg:n:21:c:ht,Sg:n:27:d:ht,Sg:n:30:e:ht,m:22:16.17.18.19.20.21| swappable(sn1,sn2);constrain(a+b+c=14);constrain(d+e=13)</code></pre>
+
+<p><img src="{{BASE64:fig_demo_cer}}" alt="Cer d18:1(4)/16:1;OH" style="max-width:100%;height:auto;" /></p>
+
+<pre><code>Cer d18:1(4)/16:1;OH  →  C(CO)(NC(=O)CC=CC.*O)C(O)C=CCCCCCCCCCCCCC |Sg:n:6:a:ht,Sg:n:9:b:ht,m:10:6.7.8.9| constrain(a+b=13)</code></pre>
+
+<p>These all run through the same machinery: standard CXSMILES inside the pipes, lipid semantics in the trailer.</p>
+
+<h2>Why each of these shapes</h2>
+
+<p>It is worth listing the constraints that pushed the design here, because each one is a thing CXSMILES genuinely cannot do.</p>
+
+<ul>
+<li>An <code>RG:</code> definition cannot contain a nested <code>|...|</code> block. CDK rejects it. So a chain needing an <code>Sg:</code> or <code>m:</code> block of its own could never be an R-group alternative, and <code>PC 16:0_18:1</code> had to choose between saying its double bond was unlocalized and saying its sn assignment was. It used to keep the double bond and drop the sn ambiguity silently. This is why chains are now always written into the main string and the sn statement moved to the trailer.</li>
+<li>A Markush R-group states the wrong cardinality. Under the ordinary reading, one label with N definitions substitutes each of its sites independently, so <code>PC 16:0_18:1</code> also admitted <code>PC 16:0/16:0</code>, and a TG permitted 27 assignments where the name allows 6. Labelled positions plus <code>swappable</code> are unambiguous.</li>
+<li>RDKit does not implement <code>RG:</code> at all, not even the minimal case. Dropping it means every string this crate emits now parses in both toolkits.</li>
+<li><code>Sg:n</code> has nowhere to record a repeat count. Hence <code>constrain(...)</code>.</li>
+<li><code>m:</code> candidate lists cannot see inside <code>Sg:</code> runs. A chain with both an unlocalized modification and unlocalized double bonds can only offer the atoms physically present in the string, so the candidate list understates the ambiguity. The safer direction, but still not the truth.</li>
+<li><code>ctu:</code> and <code>f:</code> look applicable and are not. <code>ctu:</code> is a query feature for matching either geometry, and a bare <code>C=C</code> already says as much about a structure. <code>f:</code> groups components into one entity and expresses and, never the or that unresolved regiochemistry needs.</li>
+<li>No construct expresses weighted alternatives, so a 92% call and a 100% call would be written identically in the structure. The percentages are not lost: they move to <code>dbPos</code> and <code>mPos</code> trailer tokens.</li>
+<li>No construct varies a bond order within a structure, which is why sum compositions such as <code>PC 34:1</code> are rejected rather than guessed.</li>
+</ul>
+
+<h2>What still does not work</h2>
+
+<p>Sum compositions such as <code>PC 34:1</code> and <code>PC 34:2</code> are still rejected. The old post explained why <code>PC 34:2</code> is a genuinely harder problem than <code>PC 34:1</code>, because the two double bonds can be distributed as <code>0+2</code> or <code>1+1</code> across the two chains. That reasoning stands, and so does the decision not to guess a chain split.</p>
+
+<p>Carbohydrate sequences such as <code>Gal-Glc-Cer</code> are not converted, because they do not determine the glycosidic linkage positions. A functional group on C1 of an acyl chain can change the linkage itself and is rejected.</p>
+
+<p>Confidence percentages never enter the structure. They ride in the trailer and are restored by <code>smiles2name</code>.</p>
+
+<h2>Toolkit behavior, and the cost of the trailer</h2>
+
+<p>Both CDK and RDKit parse every string in this post. That is the point of keeping the standard inside the pipes.</p>
+
+<p>The trailer is a title, and a round trip through a toolkit is lossy in a way worth knowing. The <code>|...|</code> block survives and is renumbered correctly, but a title is dropped when a toolkit rewrites the molecule. A string that went in carrying <code>constrain(a+b=15)</code> comes back with its <code>Sg:</code> markers intact and no length. Still well-formed, quietly less specific. Preserve the trailer yourself if a toolkit rewrites the molecule.</p>
+
+<p>For depiction, <code>smiles_for_depiction</code> canonicalizes the string, reindexes every CX field, and places each <code>m:</code> group over a representative bond so a viewer has something deterministic to draw. The original string remains the analytical record. Renderers that ignore <code>Sg:</code> see only the fixed scaffold and produce a truncated chain. When a plain-SMILES representative is required, <code>smiles_expand</code> chooses one valid distribution of the variable lengths. That expansion is for drawing. It does not turn an unknown position into a measurement.</p>
+
+<h2>Closing</h2>
+
+<p>I am grateful to John Mayfield for reading the old post carefully. The revision is better for it, not because the notation is prettier, but because it is honest about the boundary between what CXSMILES can say and what it cannot.</p>
+
+<p>That boundary is the whole design. Standard structure goes inside the pipes. The things CXSMILES cannot express go after them, in a trailer no toolkit will mistake for structure, where they can be read back without being lost.</p>
+
+<p>The goal has not changed from the first post: stop pretending one structure is known when the data only support a family of structures.</p>
+
+<h2>References</h2>
+
+<ul>
+<li>Weininger D. SMILES, a chemical language and information system. 1. Introduction to methodology and encoding rules. <em>Journal of Chemical Information and Computer Sciences</em>. 1988. DOI: <a href="https://doi.org/10.1021/ci00057a005">10.1021/ci00057a005</a>.</li>
+<li>ChemAxon. Extended SMILES and SMARTS, CXSMILES and CXSMARTS. <a href="https://docs.chemaxon.com/latest/formats_chemaxon-extended-smiles-and-smarts-cxsmiles-and-cxsmarts.html">Documentation</a>.</li>
+<li>Willighagen E, Rutz A, Ni Z. CDK CXSMILES documentation and lipid templates. <a href="https://egonw.github.io/cdk-cxsmiles/">Documentation</a>.</li>
+<li>Mayfield J. CDK Depict and CXSMILES support. <a href="https://github.com/cdk/cdk">Source and issues</a>.</li>
+<li>Liebisch G, Fahy E, Aoki J, et al. Update on LIPID MAPS classification, nomenclature, and shorthand notation for MS-derived lipid structures. <em>Journal of Lipid Research</em>. 2020. DOI: <a href="https://doi.org/10.1194/jlr.S120001025">10.1194/jlr.S120001025</a>.</li>
+<li>The converter in this post is the open source crate <code>lipid_notation</code>. <a href="https://github.com/zamboni-lab/lipidoracle-smiles">Repository</a>.</li>
+</ul>
