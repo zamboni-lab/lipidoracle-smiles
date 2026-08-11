@@ -1,12 +1,13 @@
-# lipid_notation
+# Lipid Shortname to/from (extended) CXSMILES conversion
 
 `lipid_notation` converts [Shorthand2020](https://doi.org/10.1194/jlr.S120001025)
 lipid shorthand names to SMILES/CXSMILES and back. It preserves structural
 uncertainty instead of choosing positions or chain assignments that were not
 measured.
 
-It attempts to maximally adhere to CXSMILES standards, and use additional
-tokens to encode the missing information.
+It attempts to maximally adhere to CXSMILES standards, and introduces the  use of additional tokens after the `| |` pipes to add the information that is not supported/retained by CXSMILES.
+
+Check `demo.html` for examples.
 
 ## Quick start
 
@@ -114,7 +115,7 @@ that knows nothing about lipids parses it, renders it, and gets a chemically
 valid molecule. Nothing lipid-specific is smuggled into a standard field, and no
 standard field is given a private meaning.
 
-### Inside the pipes: standard CXSMILES
+### Standard CXSMILES blocks inside the pipes
 
 | Encoding | Meaning |
 |---|---|
@@ -123,10 +124,14 @@ standard field is given a private meaning.
 | `m:` | this group attaches to one of these candidate atoms |
 | `$snN$` atom labels | this atom is the sn-*N* attachment point |
 
-### After the pipes: this crate's tokens
+### Features that are not supported by CXSMILES are moved in the trailer following the pipes
+
+This is a suggestion that seems works for this task, but is NOT a standard. 
+
+The idea is to exploit the string that can be attached to CXSMILES after the pipes. This is tolerated by CXSMILES toolkits, which often interpret it as a generic string. We propose to exploit it with a set of tokens to specify what isn't covered by CXSMILES: constrains in length, unknown regiochemistry (because `Sg:`and `RG:` can't be combined, and possibly additional properties on bonds and atoms, i.e. a confidence score).
 
 The trailer is a `;`-separated list of `name(argument)` tokens. It generalizes
-the `a+b=15` size constraint that the CDK cookbook already puts there, into
+the `a+b=15` size constraint proposed in [CDK CXSMILES](https://egonw.github.io/cdk-cxsmiles/templates.html#lipids-with-a-double-bond-somewhere-in-the-tail), into
 something that can carry a second kind of statement:
 
 | Token | Meaning |
@@ -302,27 +307,6 @@ structures that match this crate's own templates. A valid lipid drawn some other
 way, or a molecule outside the supported classes, returns `None` even when it is
 chemically fine.
 
-## Depiction and toolkit behavior
-
-CXSMILES support varies between chemistry toolkits. Use `smiles_for_depiction` before
-rendering a string with `m:` blocks: it canonicalizes the complete string,
-reindexes every CX field, and reduces each position variation to the two atoms
-of the nearest unused side-chain single bond. Two endpoints are retained because
-CDK ignores a one-endpoint multicenter bond and depicts its substituent as a
-detached component.
-The original string remains the analytical record. Renderers that ignore `Sg:`
-see only the fixed scaffold and produce a truncated chain; use
-`smiles_expand` or `name2structure` when a plain-SMILES
-representative is required. That expansion does not turn an unknown position
-into a measurement.
-
-Round-tripping a stored string through a toolkit is lossy in a way worth
-knowing about: the `|...|` block survives and is renumbered correctly, but the
-trailer is a title and is dropped. A string that went in carrying
-`constrain(a+b=15)` comes back with its `Sg:` markers intact and no length:
-still well-formed, quietly less specific. Preserve the trailer yourself if a
-toolkit rewrites the molecule.
-
 ## Limitations
 
 These names are refused: conversion returns `None` rather than inventing a
@@ -354,6 +338,27 @@ the name and the string is exact: `FA 18:2;3OH` converts. So do names that
 resolve the question by localizing the double bonds (`FA 18:2(11,14);9OH`), the
 same group on a saturated chain (`FA 18:0;9OH`), and unlocalized double bonds on
 an unmodified chain (`FA 18:2`).
+
+## Depiction and toolkit behavior
+
+CXSMILES support varies between chemistry toolkits. Use `smiles_for_depiction` before
+rendering a string with `m:` blocks: it canonicalizes the complete string,
+reindexes every CX field, and reduces each position variation to the two atoms
+of the nearest unused side-chain single bond. Two endpoints are retained because
+CDK ignores a one-endpoint multicenter bond and depicts its substituent as a
+detached component.
+The original string remains the analytical record. Renderers that ignore `Sg:`
+see only the fixed scaffold and produce a truncated chain; use
+`smiles_expand` or `name2structure` when a plain-SMILES
+representative is required. That expansion does not turn an unknown position
+into a measurement.
+
+Round-tripping a stored string through a toolkit is lossy in a way worth
+knowing about: the `|...|` block survives and is renumbered correctly, but the
+trailer is a title and is dropped. A string that went in carrying
+`constrain(a+b=15)` comes back with its `Sg:` markers intact and no length:
+still well-formed, quietly less specific. Preserve the trailer yourself if a
+toolkit rewrites the molecule.
 
 ## Development
 
