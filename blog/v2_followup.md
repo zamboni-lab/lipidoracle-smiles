@@ -48,10 +48,10 @@ The part after the closing pipe is the title field. A SMILES reader treats a tit
 
 ```mermaid
 flowchart LR
-    NAME[lipid name<br/>PC 16:0_18:1] --> PIPES[|...|<br/>standard CXSMILES]
+    NAME[lipid name<br/>PC 16:0_18:1] --> PIPES[the pipes<br/>standard CXSMILES]
     NAME --> TRAILER[after the pipes<br/>the trailer, a title]
-    PIPES --> PIPECONTENT[Sg:  m:  sn labels  bare C=C]
-    TRAILER --> TRAILERCONTENT[constrain  swappable  dbPos  mPos]
+    PIPES --> PIPEBOX[Sg:  m:  sn labels  bare C=C]
+    TRAILER --> TRAILBOX[constrain  swappable  dbPos  mPos]
     PIPES --> NOTE1[parsed as a molecule]
     TRAILER --> NOTE2[never mistaken for structure]
 ```
