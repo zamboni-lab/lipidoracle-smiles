@@ -25,9 +25,9 @@
 //! molecule. `_` means regiochemistry is *not* known (the classic
 //! bulk/species-level lipid shorthand, and also what LipidOracle's EAD
 //! engines always use for DG/TG/CL regardless of how well the individual
-//! chains are localized) — in that case the backbone carries a
-//! chains are still written into the backbone in name order, but the atom
-//! each one hangs from is labelled `snN` and a `swappable(...)` token after
+//! chains are localized) — in that case the chains are still written into
+//! the backbone in name order, but the atom each one hangs from is labelled `snN`
+//! and a `swappable(...)` token after
 //! the closing pipe says their assignment is one arbitrary choice among
 //! several, e.g. `PC 16:0_18:1(9)` becomes
 //! `C(COP(=O)([O-])OCC[N+](C)(C)C)(OC(=O)CCCCCCCC=CCCCCCCCC)COC(=O)CCCCCCCCCCCCCCC |$;;;;;;;;;;;;;sn2;;;;;;;;;;;;;;;;;;;;;sn1$| swappable(sn1,sn2)`.
@@ -1102,10 +1102,10 @@ pub(crate) fn count_atoms(smiles: &str) -> usize {
 
 /// Whether `c` begins an atom token outside brackets.
 ///
-/// The one definition of the convention. It was written out four times with
-/// three different character sets before this existed, and `insert_padding_atoms`
-/// was the copy that had lost `B`, so a brominated chain padded to the wrong
-/// length.
+/// The single definition of this convention; every caller that needs to
+/// recognize atom-starting characters (including `insert_padding_atoms`)
+/// goes through this function so the accepted character set can't drift
+/// between call sites.
 pub(crate) fn starts_atom(c: char) -> bool {
     matches!(
         c,

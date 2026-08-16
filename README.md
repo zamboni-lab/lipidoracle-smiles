@@ -5,7 +5,7 @@ lipid shorthand names to SMILES/CXSMILES and back. It preserves structural
 uncertainty instead of choosing positions or chain assignments that were not
 measured.
 
-It attempts to maximally adhere to CXSMILES standards, and introduces the  use of additional tokens after the `| |` pipes to add the information that is not supported/retained by CXSMILES.
+It adheres to CXSMILES standards as closely as possible, and adds tokens after the `| |` pipes to carry information CXSMILES itself doesn't support or retain.
 
 Check `demo.html` for examples.
 
@@ -124,11 +124,14 @@ standard field is given a private meaning.
 | `m:` | this group attaches to one of these candidate atoms |
 | `$snN$` atom labels | this atom is the sn-*N* attachment point |
 
-### Features that are not supported by CXSMILES are moved in the trailer following the pipes
+### The trailer: everything CXSMILES cannot express
 
-This is a suggestion that seems works for this task, but is NOT a standard. 
-
-The idea is to exploit the string that can be attached to CXSMILES after the pipes. This is tolerated by CXSMILES toolkits, which often interpret it as a generic string. We propose to exploit it with a set of tokens to specify what isn't covered by CXSMILES: constrains in length, unknown regiochemistry (because `Sg:`and `RG:` can't be combined, and possibly additional properties on bonds and atoms, i.e. a confidence score).
+**This trailer format is a proposal, not a standard.** CXSMILES toolkits
+tolerate an arbitrary string after the closing `|...|` pipes and typically
+treat it as an opaque generic string, so this crate uses that space for a set
+of `;`-separated tokens covering what CXSMILES cannot express: length
+constraints on a `Sg:` run, regiochemistry left unknown because `Sg:` and
+`RG:` cannot be combined, and confidence scores on bonds or atoms.
 
 The trailer is a `;`-separated list of `name(argument)` tokens. It generalizes
 the `a+b=15` size constraint proposed in [CDK CXSMILES](https://egonw.github.io/cdk-cxsmiles/templates.html#lipids-with-a-double-bond-somewhere-in-the-tail), into
@@ -143,9 +146,9 @@ something that can carry a second kind of statement:
 
 `dbPos` and `mPos` carry the bracketed consensus tail that instrument software
 puts after a name, such as `FA 18:2(9,12) [DB sn1: Δ9 100%, Δ12 88%]`. No structure
-format can hold a weighted call, so this used to be stripped and thrown away.
-It is metadata, and the trailer is where this crate's metadata lives, so it is
-carried there instead and `smiles2name` reconstructs the original tail from it.
+format can hold a weighted call, so it is carried in the trailer instead —
+metadata belongs where this crate's other metadata lives — and `smiles2name`
+reconstructs the original tail from it.
 
 Within a token, `,` separates positions and `|` separates *mutually exclusive*
 candidates for one feature: `dbPos(sn1:5@100|14@50|15@50)` reads as "Δ5 for
@@ -211,8 +214,7 @@ one shaped the encoding above:
 - **`ctu:` and `f:` look applicable and are not.** `ctu:` is a *query* feature
   for matching either geometry, and a bare `C=C` already says as much about a
   structure; `f:` groups components into one entity and expresses *and*, never
-  the *or* that unresolved regiochemistry needs. Both were emitted by earlier
-  revisions of this crate and both were wrong.
+  the *or* that unresolved regiochemistry needs.
 - **No construct expresses weighted alternatives**, so a 92% call and a 100%
   call are written identically in the structure. The percentages are not lost:
   they move to `dbPos`/`mPos` trailer tokens, which name the chain or the `m:`

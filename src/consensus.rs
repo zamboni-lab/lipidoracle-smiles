@@ -7,10 +7,9 @@
 //! FA 20:4;11OH [DB sn1: Δ5 100%, Δ8 100%, Δ12 100% | Δ14 50% | Δ15 50%]
 //! ```
 //!
-//! No structure format can hold a weighted call, so this used to be stripped
-//! and thrown away. It is *metadata*, though, and the trailer after the
-//! closing pipe is exactly where this crate's metadata lives — so it can be
-//! carried there without any of it touching the CXSMILES.
+//! No structure format can hold a weighted call. It is *metadata*, though, and
+//! the trailer after the closing pipe is exactly where this crate's metadata
+//! lives — so it is carried there without any of it touching the CXSMILES.
 //!
 //! # What the tokens say
 //!
