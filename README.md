@@ -1,5 +1,7 @@
 # Lipid Shortname to/from (extended) CXSMILES conversion
 
+Rationale: [Translating lipid shorthand notation into extended CXSMILES, and back](https://metabolomics.blog/2026/08/fair-lipid-representation-v2/)
+
 `lipid_notation` converts [Shorthand2020](https://doi.org/10.1194/jlr.S120001025)
 lipid shorthand names to SMILES/CXSMILES and back. It preserves structural
 uncertainty instead of choosing positions or chain assignments that were not
@@ -407,3 +409,4 @@ MIT
   structures.* J Lipid Res, 2020;61(12):1539–1555.
   [doi:10.1194/jlr.S120001025](https://doi.org/10.1194/jlr.S120001025).
   Tables 1A/1B/1C are the modification and ring vocabulary of §1.3.
+- **Blog post**: [Translating lipid shorthand notation into extended CXSMILES, and back](https://metabolomics.blog/2026/08/fair-lipid-representation-v2/)
