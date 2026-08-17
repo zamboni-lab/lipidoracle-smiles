@@ -4,8 +4,11 @@
 //! brackets:
 //!
 //! ```text
-//! FA 20:4;11OH [DB sn1: Δ5 100%, Δ8 100%, Δ12 100% | Δ14 50% | Δ15 50%]
+//! PE 18:0/20:4;11OH [DB sn2: Δ5 100%, Δ8 100%, Δ12 100% | Δ14 50% | Δ15 50%]
 //! ```
+//!
+//! A single-chain lipid (FA, CAR, ...) has no sn position to name, so its
+//! head carries no anchor at all — `FA 20:4;11OH [DB: Δ5 100%, Δ8 100%]`.
 //!
 //! No structure format can hold a weighted call. It is *metadata*, though, and
 //! the trailer after the closing pipe is exactly where this crate's metadata
@@ -15,9 +18,9 @@
 //!
 //! | token | says |
 //! |---|---|
-//! | `dbPos(sn1:5@100,8@100)` | double bonds at Δ5 and Δ8, each called with 100% confidence |
-//! | `dbPos(sn1:14@50\|15@50)` | one double bond, Δ14 or Δ15, evenly split |
-//! | `mPos(sn1:11OH@100)` | the hydroxyl at position 11, called with 100% confidence |
+//! | `dbPos(sn2:5@100,8@100)` | double bonds at Δ5 and Δ8, each called with 100% confidence |
+//! | `dbPos(sn2:14@50\|15@50)` | one double bond, Δ14 or Δ15, evenly split |
+//! | `mPos(chain1:11OH@100)` | a single-chain lipid's hydroxyl at position 11, called with 100% confidence |
 //! | `mPos(OH1:11OH@50,13OH@50)` | the group on the stub labelled `OH1` is at 11 or 13 |
 //!
 //! `|` separates mutually exclusive alternatives, which is what it means in
@@ -33,7 +36,8 @@
 //! which is strictly more information and still not a determination.
 //!
 //! **It names things, never positions.** The anchor before the `:` is an
-//! atom label the `|...|` block carries — `snN` for a chain, or the stub's
+//! atom label the `|...|` block carries — `snN` for a chain of a complex
+//! lipid, `chain1` for the one chain of a single-chain lipid, or the stub's
 //! own label. An atom *index* would rot the first time a toolkit renumbered
 //! the molecule, because nothing rewrites the title field. Verified: a label
 //! on a floating `*` stub survives canonical rewriting still attached to its
@@ -92,10 +96,19 @@ pub(crate) fn parse_tail(tail: &str) -> Option<Vec<Consensus>> {
         let (head, body) = section.split_once(':')?;
         let mut head = head.split_whitespace();
         let kind = head.next()?.to_string();
-        let sn = head.next()?.strip_prefix("sn")?.parse().ok()?;
-        if head.next().is_some() {
-            return None;
-        }
+        // A single-chain lipid (FA, CAR, ...) has nothing to number, so its
+        // tail omits the `snN` anchor entirely and the position defaults to
+        // the lipid's one chain.
+        let sn = match head.next() {
+            Some(token) => {
+                let sn = token.strip_prefix("sn")?.parse().ok()?;
+                if head.next().is_some() {
+                    return None;
+                }
+                sn
+            }
+            None => 1,
+        };
 
         let mut alternatives = Vec::new();
         for group in body.split('|') {
@@ -133,14 +146,25 @@ fn parse_call(text: &str) -> Option<Call> {
 /// `stub_label` is asked for the label of the `m:` stub belonging to a given
 /// unlocalized group, so a token about a floating substituent anchors to that
 /// substituent rather than merely to its chain.
+///
+/// `single_chain` is whether the lipid has only one chain to name (FA, CAR,
+/// ...): such a chain has no sn position, so its anchor is `chain1` rather
+/// than `sn1`, which is reserved for a chain of a complex lipid.
 pub(crate) fn tokens(
     entries: &[Consensus],
+    single_chain: bool,
     mut stub_label: impl FnMut(&Consensus) -> Option<String>,
 ) -> Vec<String> {
     entries
         .iter()
         .map(|entry| {
-            let anchor = stub_label(entry).unwrap_or_else(|| format!("sn{}", entry.sn));
+            let anchor = stub_label(entry).unwrap_or_else(|| {
+                if single_chain {
+                    "chain1".to_string()
+                } else {
+                    format!("sn{}", entry.sn)
+                }
+            });
             let body = entry
                 .alternatives
                 .iter()
@@ -228,7 +252,10 @@ pub(crate) fn from_tokens(
 }
 
 /// Writes consensus entries back as the bracketed tail they came from.
-pub(crate) fn format_tail(entries: &[Consensus]) -> Option<String> {
+///
+/// `single_chain` mirrors [`tokens`]: a single-chain lipid's tail carries no
+/// `snN` anchor at all, since there is only the one chain to mean.
+pub(crate) fn format_tail(entries: &[Consensus], single_chain: bool) -> Option<String> {
     if entries.is_empty() {
         return None;
     }
@@ -249,7 +276,11 @@ pub(crate) fn format_tail(entries: &[Consensus]) -> Option<String> {
                         .join(", ")
                 })
                 .collect();
-            format!("{} sn{}: {}", entry.kind, entry.sn, groups.join(" | "))
+            if single_chain {
+                format!("{}: {}", entry.kind, groups.join(" | "))
+            } else {
+                format!("{} sn{}: {}", entry.kind, entry.sn, groups.join(" | "))
+            }
         })
         .collect();
     Some(format!("[{}]", sections.join("; ")))
@@ -301,7 +332,7 @@ mod tests {
     #[test]
     fn tokens_carry_no_whitespace() {
         let parsed = parse_tail(SAMPLE).unwrap();
-        let tokens = tokens(&parsed, |_| None);
+        let tokens = tokens(&parsed, false, |_| None);
         assert_eq!(tokens, ["dbPos(sn1:5@100,8@100)", "mPos(sn1:11OH@100)"]);
         for token in &tokens {
             assert!(
@@ -317,8 +348,24 @@ mod tests {
     fn a_stub_anchor_replaces_the_chain_anchor() {
         let parsed = parse_tail("[OH sn1: 11 50%, 13 50%]").unwrap();
         assert_eq!(
-            tokens(&parsed, |_| Some("OH1".to_string())),
+            tokens(&parsed, false, |_| Some("OH1".to_string())),
             ["mPos(OH1:11OH@50,13OH@50)"]
+        );
+    }
+
+    /// A single-chain lipid has nothing to number, so its bare tail defaults
+    /// to sn1 and its anchor is `chain1`, never `sn1`.
+    #[test]
+    fn a_bare_head_defaults_to_the_one_chain() {
+        let parsed = parse_tail("[OH: 11 50%, 13 50%]").unwrap();
+        assert_eq!(parsed[0].sn, 1);
+        assert_eq!(
+            tokens(&parsed, true, |_| None),
+            ["mPos(chain1:11OH@50,13OH@50)"]
+        );
+        assert_eq!(
+            format_tail(&parsed, true).as_deref(),
+            Some("[OH: 11 50%, 13 50%]")
         );
     }
 
@@ -331,10 +378,10 @@ mod tests {
             "[DB sn1: \u{0394}9 92%; DB sn2: \u{0394}9 100%; OH sn2: 5 80%]",
         ] {
             let parsed = parse_tail(tail).unwrap_or_else(|| panic!("parse {tail}"));
-            let encoded = tokens(&parsed, |_| None).join(";");
+            let encoded = tokens(&parsed, false, |_| None).join(";");
             let decoded = from_tokens(&encoded, |anchor| anchor.strip_prefix("sn")?.parse().ok());
             assert_eq!(decoded, parsed, "tokens lost something: {encoded}");
-            assert_eq!(format_tail(&decoded).as_deref(), Some(tail), "{encoded}");
+            assert_eq!(format_tail(&decoded, false).as_deref(), Some(tail), "{encoded}");
         }
     }
 
@@ -344,12 +391,22 @@ mod tests {
             "not a tail",
             "[DB sn1]",
             "[DB sn1: ]",
-            "[DB: 5 100%]",
+            "[DB: ]",
             "[DB sn1: five 100%]",
             "[DB snX: 5 100%]",
+            "[DB sn1 sn2: 5 100%]",
         ] {
             assert_eq!(parse_tail(tail), None, "{tail} should not parse");
         }
+    }
+
+    /// A single-chain lipid's tail has no `snN` at all — the head is just the
+    /// kind.
+    #[test]
+    fn a_bare_head_is_accepted() {
+        let parsed = parse_tail("[DB: 5 100%]").unwrap();
+        assert_eq!(parsed[0].kind, "DB");
+        assert_eq!(parsed[0].sn, 1);
     }
 }
 
@@ -363,17 +420,31 @@ mod round_trip {
     #[test]
     fn consensus_survives_the_round_trip() {
         for name in [
-            "FA 18:1(9) [DB sn1: \u{0394}9 92%]",
-            "FA 18:2(9,12) [DB sn1: \u{0394}9 100%, \u{0394}12 88%]",
+            // FA has one chain, so its tail carries no `snN` anchor at all.
+            "FA 18:1(9) [DB: \u{0394}9 92%]",
+            "FA 18:2(9,12) [DB: \u{0394}9 100%, \u{0394}12 88%]",
             "PC 16:0/18:1(9) [DB sn2: \u{0394}9 100%]",
             "PC 16:0_18:1(9) [DB sn2: \u{0394}9 100%]",
             // An unlocalized group: the token anchors to the stub's own label
             // and narrows the `m:` block from "any carbon" to two candidates.
-            "FA 20:4;OH [OH sn1: 11 50%, 13 50%]",
+            "FA 20:4;OH [OH: 11 50%, 13 50%]",
         ] {
             let smiles = name2smiles(name).unwrap_or_else(|| panic!("{name} should resolve"));
             assert_eq!(smiles2name(&smiles).as_deref(), Some(name), "{name}");
         }
+    }
+
+    /// A single-chain lipid's tail is also accepted with the `snN` anchor an
+    /// older name might carry, but the anchor is a lie for a lipid with only
+    /// one chain — the round trip strips it back down to the bare form.
+    #[test]
+    fn a_stray_sn1_on_a_single_chain_lipid_is_stripped() {
+        let smiles = name2smiles("FA 20:4;OH [OH sn1: 11 50%, 13 50%]")
+            .expect("sn1 must still be accepted for backward compatibility");
+        assert_eq!(
+            smiles2name(&smiles).as_deref(),
+            Some("FA 20:4;OH [OH: 11 50%, 13 50%]")
+        );
     }
 
     /// The consensus rides in the trailer and changes no CXSMILES field, so
@@ -381,14 +452,16 @@ mod round_trip {
     #[test]
     fn consensus_does_not_touch_the_structure() {
         let plain = name2smiles("FA 18:2(9,12)").unwrap();
-        let annotated = name2smiles("FA 18:2(9,12) [DB sn1: \u{0394}9 100%]").unwrap();
+        let annotated = name2smiles("FA 18:2(9,12) [DB: \u{0394}9 100%]").unwrap();
         assert_eq!(
             plain.split(" |").next(),
             annotated.split(" |").next(),
             "the molecule changed"
         );
         assert!(!plain.contains("dbPos"), "{plain}");
-        assert!(annotated.contains("dbPos(sn1:9@100)"), "{annotated}");
+        // A single-chain lipid names its chain `chain1`, never `sn1` — that
+        // anchor is reserved for a chain of a complex lipid.
+        assert!(annotated.contains("dbPos(chain1:9@100)"), "{annotated}");
     }
 
     /// A tail this crate cannot parse is ignored rather than guessed at, and

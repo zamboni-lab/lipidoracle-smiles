@@ -63,6 +63,26 @@ const EXAMPLES: &[Example] = &[
         valid: true,
     },
     Example {
+        group: "Per-position confidence calls",
+        shorthand: "FA 20:4;OH [OH: 11 50%, 13 50%]",
+        valid: true,
+    },
+    Example {
+        group: "Per-position confidence calls",
+        shorthand: "FA 18:1(9) [DB sn1: \u{0394}9 92%]",
+        valid: true,
+    },
+    Example {
+        group: "Per-position confidence calls",
+        shorthand: "LPE 20:4 [DB sn1: \u{0394}5 100%, \u{0394}8 100%, \u{0394}12 100% | \u{0394}14 50% | \u{0394}15 50%]",
+        valid: true,
+    },
+    Example {
+        group: "Per-position confidence calls",
+        shorthand: "LPE 18:1(9);OH [OH sn1: 11 100%]",
+        valid: true,
+    },
+    Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "FA 20:3(5,8,11);(OH)2",
         valid: true,
@@ -80,6 +100,11 @@ const EXAMPLES: &[Example] = &[
     Example {
         group: "Combined rings, groups, and uncertainty",
         shorthand: "TG 18:1(9);5OH_18:2(11,14);9Ep_18:1",
+        valid: true,
+    },
+    Example {
+        group: "Combined rings, groups, and uncertainty",
+        shorthand: "TG 18:1(9);5OH_18:0;12Ep_18:1",
         valid: true,
     },
     Example {

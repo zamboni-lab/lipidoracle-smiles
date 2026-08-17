@@ -266,23 +266,33 @@ pub(crate) fn parse_smiles(smi: &str) -> Option<String> {
 /// enumerated here and the regenerate-and-compare in `parse_smiles` discards
 /// the wrong ones.
 fn consensus_tails(canonical: &str) -> Vec<Option<String>> {
-    let trailer = match canonical.split_once(" |") {
-        Some((_, rest)) => rest.split_once('|').map(|(_, t)| t).unwrap_or("").trim(),
-        None => "",
+    let (fields, trailer) = match canonical.split_once(" |") {
+        Some((_, rest)) => match rest.split_once('|') {
+            Some((fields, trailer)) => (fields, trailer.trim()),
+            None => ("", ""),
+        },
+        None => ("", ""),
     };
     if !trailer.contains("dbPos(") && !trailer.contains("mPos(") {
         return vec![None];
     }
+
+    // A `chain1` label only ever appears on a lipid with one chain to name —
+    // a complex lipid's chains are always `sn1`, `sn2`, ...
+    let single_chain = fields
+        .split(|c| c == ',' || c == ';' || c == '$')
+        .any(|token| token == "chain1");
 
     let mut out = Vec::new();
     for assumed_sn in 1..=4 {
         let entries = crate::consensus::from_tokens(trailer, |anchor| {
             anchor
                 .strip_prefix("sn")
+                .or_else(|| anchor.strip_prefix("chain"))
                 .and_then(|n| n.parse().ok())
                 .or(Some(assumed_sn))
         });
-        if let Some(tail) = crate::consensus::format_tail(&entries) {
+        if let Some(tail) = crate::consensus::format_tail(&entries, single_chain) {
             if !out.contains(&Some(tail.clone())) {
                 out.push(Some(tail));
             }
@@ -295,6 +305,12 @@ struct GraphTemplate {
     class: &'static str,
     chains: usize,
     sn: Vec<usize>,
+    /// How many acyl/alkyl positions the headgroup has in total (e.g. 2 for
+    /// a diacylglycerophospholipid), which can exceed `chains` for a lyso
+    /// reference that only fills one of them. Lets a chain found at a later
+    /// position (an LPE's acyl at sn2) keep the earlier gap explicit —
+    /// `LPE 0:0/18:1` — rather than only ever reading as sn1.
+    total_slots: usize,
     head_signature: String,
 }
 
@@ -561,35 +577,53 @@ fn graph_templates() -> &'static [GraphTemplate] {
     static TEMPLATES: OnceLock<Vec<GraphTemplate>> = OnceLock::new();
     TEMPLATES.get_or_init(|| {
         [
-            ("FA", "FA 8:0"),
-            ("AMP-FA", "AMP-FA 8:0"),
-            ("CE", "CE 8:0"),
-            ("CAR", "CAR 8:0"),
-            ("NAE", "NAE 8:0"),
-            ("MG", "MG 8:0"),
-            ("DG", "DG 8:0/9:0"),
-            ("TG", "TG 8:0/9:0/10:0"),
-            ("LPC", "LPC 8:0"),
-            ("PC", "PC 8:0/9:0"),
-            ("LPE", "LPE 8:0"),
-            ("PE", "PE 8:0/9:0"),
-            ("LPS", "LPS 8:0"),
-            ("PS", "PS 8:0/9:0"),
-            ("LPG", "LPG 8:0"),
-            ("PG", "PG 8:0/9:0"),
-            ("LPI", "LPI 8:0"),
-            ("PI", "PI 8:0/9:0"),
-            ("LPA", "LPA 8:0"),
-            ("PA", "PA 8:0/9:0"),
-            ("CL", "CL 8:0/9:0/10:0/11:0"),
+            ("FA", "FA 8:0", 1),
+            ("AMP-FA", "AMP-FA 8:0", 1),
+            ("CE", "CE 8:0", 1),
+            ("CAR", "CAR 8:0", 1),
+            ("NAE", "NAE 8:0", 1),
+            ("MG", "MG 8:0", 1),
+            ("DG", "DG 8:0/9:0", 2),
+            ("TG", "TG 8:0/9:0/10:0", 3),
+            // A lyso reference fills only one of its headgroup's two acyl
+            // positions, so both the sn1 and sn2 references are registered
+            // here — the one the input molecule's cut actually matches
+            // determines whether it reads back as `LPC 8:0` (sn1, and so
+            // droppable down to bare shorthand) or `LPC 0:0/8:0` (sn2, which
+            // has nothing later to drop and so stays explicit).
+            ("LPC", "LPC 8:0", 2),
+            ("LPC", "LPC 0:0/8:0", 2),
+            ("PC", "PC 8:0/9:0", 2),
+            ("LPE", "LPE 8:0", 2),
+            ("LPE", "LPE 0:0/8:0", 2),
+            ("PE", "PE 8:0/9:0", 2),
+            ("LPS", "LPS 8:0", 2),
+            ("LPS", "LPS 0:0/8:0", 2),
+            ("PS", "PS 8:0/9:0", 2),
+            ("LPG", "LPG 8:0", 2),
+            ("LPG", "LPG 0:0/8:0", 2),
+            ("PG", "PG 8:0/9:0", 2),
+            ("LPI", "LPI 8:0", 2),
+            ("LPI", "LPI 0:0/8:0", 2),
+            ("PI", "PI 8:0/9:0", 2),
+            ("LPA", "LPA 8:0", 2),
+            ("LPA", "LPA 0:0/8:0", 2),
+            ("PA", "PA 8:0/9:0", 2),
+            ("CL", "CL 8:0/9:0/10:0/11:0", 4),
         ]
         .into_iter()
-        .filter_map(|(class, reference)| make_graph_template(class, reference))
+        .filter_map(|(class, reference, total_slots)| {
+            make_graph_template(class, reference, total_slots)
+        })
         .collect()
     })
 }
 
-fn make_graph_template(class: &'static str, reference: &'static str) -> Option<GraphTemplate> {
+fn make_graph_template(
+    class: &'static str,
+    reference: &'static str,
+    total_slots: usize,
+) -> Option<GraphTemplate> {
     let structure = crate::forward::generate_structure(reference)?;
     let mol = parse(&structure.smiles).ok()?;
     let mut removed = HashSet::new();
@@ -624,6 +658,7 @@ fn make_graph_template(class: &'static str, reference: &'static str) -> Option<G
         class,
         chains: structure.chains.len(),
         sn,
+        total_slots,
         head_signature: canonical_smiles(&head_mol),
     })
 }
@@ -668,11 +703,19 @@ fn match_graph_template(
         let names = permutations(&chain_tokens)
             .into_iter()
             .filter_map(|tokens| {
-                let slots = template
-                    .sn
-                    .iter()
-                    .copied()
-                    .zip(tokens.into_iter().map(Some))
+                // Spans every position the headgroup has, not just the ones
+                // this chain set fills, so a gap before the last real chain
+                // (an LPE's acyl sitting at sn2) survives as an explicit
+                // `0:0` instead of being mistaken for sn1.
+                let slots = (1..=template.total_slots)
+                    .map(|sn| {
+                        let token = template
+                            .sn
+                            .iter()
+                            .position(|&s| s == sn)
+                            .map(|i| tokens[i].clone());
+                        (sn, token)
+                    })
                     .collect();
                 let (_, tokens) = join_slots(slots, sep)?;
                 Some(format!("{} {tokens}", template.class))
@@ -1085,6 +1128,34 @@ mod tests {
             "ST",
         ] {
             assert_eq!(round(name).as_deref(), Some(name), "{name}");
+        }
+    }
+
+    /// A lyso species' single acyl chain can sit at either glycerol
+    /// position: the shorthand leaves that open (either is a valid reading,
+    /// so it is treated as sn1/sn2-swappable and round-trips to itself), and
+    /// `0:0` pins one down explicitly. sn2 has nothing later to collapse
+    /// into shorthand, so it survives exactly; sn1 collapses to the
+    /// shorthand it is indistinguishable from, the same way `DG 16:0/0:0`
+    /// collapses to `MG 16:0`.
+    #[test]
+    fn lyso_forms_round_trip_and_sn1_collapses_to_shorthand() {
+        for class in ["LPC", "LPE", "LPA", "LPI", "LPS", "LPG"] {
+            assert_eq!(
+                round(&format!("{class} 18:1")).as_deref(),
+                Some(format!("{class} 18:1")).as_deref(),
+                "{class} bare shorthand"
+            );
+            assert_eq!(
+                round(&format!("{class} 18:1/0:0")).as_deref(),
+                Some(format!("{class} 18:1")).as_deref(),
+                "{class} sn1-specific collapses to shorthand"
+            );
+            assert_eq!(
+                round(&format!("{class} 0:0/18:1")).as_deref(),
+                Some(format!("{class} 0:0/18:1")).as_deref(),
+                "{class} sn2-specific survives exactly"
+            );
         }
     }
 

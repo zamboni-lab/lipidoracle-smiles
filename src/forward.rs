@@ -182,12 +182,23 @@ struct ParsedChain {
 pub(crate) fn generate_smiles(name: &str) -> Option<String> {
     let (canonical, tail) = crate::nomenclature::split_display_name(name);
     let built = build_lipid(&canonical, true)?;
+    let single_chain = is_single_chain_class(canonical.split(' ').next().unwrap_or(&canonical));
     Some(
         match tail.as_deref().and_then(crate::consensus::parse_tail) {
-            Some(entries) => attach_consensus(built, &entries),
+            Some(entries) => attach_consensus(built, single_chain, &entries),
             None => built.smiles,
         },
     )
+}
+
+/// Whether `class` names a lipid with exactly one chain and no sn position
+/// to speak of (FA, CAR, ...), as opposed to a complex lipid that merely
+/// happens to have only one chain filled in (an LPC, a mono-acylglycerol).
+/// A single-chain lipid's consensus tail carries no `snN`/`chain1` distinction
+/// worth making in its name, and its trailer anchors as `chain1` rather than
+/// `sn1`, which names a chain of a complex lipid.
+fn is_single_chain_class(class: &str) -> bool {
+    matches!(class, "FA" | "AMP-FA" | "FA-AMP" | "NAE" | "CAR" | "CE")
 }
 
 /// Adds the `dbPos`/`mPos` tokens for a name's consensus tail, plus whatever
@@ -200,7 +211,11 @@ pub(crate) fn generate_smiles(name: &str) -> Option<String> {
 ///
 /// Nothing here touches the CXSMILES fields themselves — the consensus is
 /// metadata and stays in the trailer, which is what it is for.
-fn attach_consensus(built: Built, entries: &[crate::consensus::Consensus]) -> String {
+fn attach_consensus(
+    built: Built,
+    single_chain: bool,
+    entries: &[crate::consensus::Consensus],
+) -> String {
     let (base, fields, trailer) = match built.smiles.split_once(" |") {
         Some((base, rest)) => match rest.split_once('|') {
             Some((fields, trailer)) => (base, fields.to_string(), trailer.trim().to_string()),
@@ -214,7 +229,14 @@ fn attach_consensus(built: Built, entries: &[crate::consensus::Consensus]) -> St
     let mut sites: Vec<(String, usize)> = built
         .sn_sites
         .iter()
-        .map(|(sn, atom)| (format!("sn{sn}"), *atom))
+        .map(|(sn, atom)| {
+            let label = if single_chain {
+                "chain1".to_string()
+            } else {
+                format!("sn{sn}")
+            };
+            (label, *atom)
+        })
         .collect();
     sites.extend(
         stubs
@@ -223,7 +245,7 @@ fn attach_consensus(built: Built, entries: &[crate::consensus::Consensus]) -> St
     );
     sites.sort_by_key(|(_, atom)| *atom);
 
-    let tokens = crate::consensus::tokens(entries, |entry| {
+    let tokens = crate::consensus::tokens(entries, single_chain, |entry| {
         // A token about a group the structure left floating anchors to that
         // stub; one about a position the structure already states anchors to
         // the chain.
@@ -1899,10 +1921,16 @@ fn glycerolipid_smiles(chains: &[ParsedChain], slots: usize, swappable: bool) ->
 
 /// Diacyl-glycerophospholipid: `sn1`/`sn2` chains plus a fixed
 /// phospho-headgroup tail attached at sn3 (e.g. `"OP(=O)([O-])OCC[N+](C)(C)C"`
-/// for PC). Also covers the lyso forms, which supply one chain and so have
-/// nothing to be ambiguous between. `headgroup_tail` is generic across
-/// PC/PE/PS/PG/PI/PA and their lyso forms, so this one builder gives all of
-/// them unlocalized-double-bond and regiochemistry coverage.
+/// for PC). Also covers the lyso forms, which supply only one chain — bare
+/// shorthand (`"LPE 18:1"`) places it at sn1 here, but that position is not
+/// asserted: biologically the acyl could sit at either sn1 or sn2, so the
+/// reverse direction (`reverse::graph_templates`) also recognizes it at sn2
+/// and, since sn1 is where the shorthand already points, only an sn2 match
+/// (`"LPE 0:0/18:1"`) is reported back explicitly — an sn1 match collapses
+/// to the shorthand it is indistinguishable from. `headgroup_tail` is
+/// generic across PC/PE/PS/PG/PI/PA and their lyso forms, so this one
+/// builder gives all of them unlocalized-double-bond and regiochemistry
+/// coverage.
 fn gpl_smiles(headgroup_tail: &str, chains: &[ParsedChain], swappable: bool) -> Option<Built> {
     if chains.is_empty() || chains.len() > 2 {
         return None;
