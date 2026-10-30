@@ -14,7 +14,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use lipid_notation::{canonicalize, name2smiles, name2structure, smiles2name, smiles_expand};
+use lipid_notation::{canonicalize, name2smiles, name2structure, smiles_expand, smiles2name};
 
 fn testdata(file: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -43,7 +43,7 @@ fn read_csv(file: &str) -> Vec<Vec<String>> {
                         chars.next();
                     }
                     '"' => quoted = !quoted,
-                    ',' if !quoted => fields.push(std::mem::take(&mut cur)),
+                    ',' if !quoted => fields.push(core::mem::take(&mut cur)),
                     _ => cur.push(c),
                 }
             }
@@ -53,34 +53,9 @@ fn read_csv(file: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// Atom symbols in SMILES emission order — an independent reimplementation of
-/// the indexing convention every CXSMILES block depends on. Independent on
-/// purpose: if the generator's own atom counter drifts, a test sharing that
-/// counter would drift with it.
-fn atom_symbols(smiles: &str) -> Vec<String> {
-    let chars: Vec<char> = smiles.chars().collect();
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i < chars.len() {
-        match chars[i] {
-            '[' => {
-                let start = i;
-                while i < chars.len() && chars[i] != ']' {
-                    i += 1;
-                }
-                out.push(chars[start..=i.min(chars.len() - 1)].iter().collect());
-                i += 1;
-            }
-            c @ ('B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'c' | 'n' | 'o' | 's' | 'p'
-            | '*') => {
-                out.push(c.to_string());
-                i += 1;
-            }
-            _ => i += 1,
-        }
-    }
-    out
-}
+#[path = "support/atoms.rs"]
+mod atoms;
+use atoms::atom_symbols;
 
 /// Splits a stored string into base SMILES, the `|...|` blocks, and the
 /// trailing size constraint (which lives *outside* the pipes and is not a
@@ -221,7 +196,7 @@ fn chain_carbon_counts_match_the_names() {
 /// A position-variation bond's variable end has to be a `*` dummy carrying
 /// exactly one bond, and its candidates have to be chain carbons. Both
 /// toolkits enforce the first: CDK ignores an `m:` block that points anywhere
-/// else, and RDKit rejects the whole string.
+/// else, and `RDKit` rejects the whole string.
 #[test]
 fn m_blocks_point_at_a_wildcard_stub() {
     let mut seen = 0;
@@ -284,8 +259,10 @@ fn sn_labels_land_on_the_atom_each_chain_hangs_from() {
         let labels = blocks
             .split_once('$')
             .and_then(|(_, r)| r.split_once('$'))
-            .map(|(l, _)| l)
-            .unwrap_or_else(|| panic!("{name}: swappable token with no $...$ labels"));
+            .map_or_else(
+                || panic!("{name}: swappable token with no $...$ labels"),
+                |(l, _)| l,
+            );
 
         let symbols = atom_symbols(base);
         let mut found: Vec<&str> = Vec::new();
@@ -314,9 +291,9 @@ fn sn_labels_land_on_the_atom_each_chain_hangs_from() {
             .unwrap_or("")
             .split(',')
             .collect();
-        found.sort();
+        found.sort_unstable();
         let mut named_sorted = named.clone();
-        named_sorted.sort();
+        named_sorted.sort_unstable();
         assert_eq!(
             found, named_sorted,
             "{name}: swappable names {named:?} but the string labels {found:?}"
@@ -544,7 +521,7 @@ fn doc_prose_quotes_current_output() {
                     .filter(|(b, _, _)| b == base)
                     .map(|(b, _, cur)| cur.strip_prefix(b.as_str()).unwrap_or("").trim())
                     .collect();
-                expected.sort();
+                expected.sort_unstable();
                 expected.dedup();
                 if !expected.contains(&quoted) {
                     stale.push(format!(

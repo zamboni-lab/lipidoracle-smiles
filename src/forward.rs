@@ -7,7 +7,7 @@
 //! SMILES for that isomer. Double-bond/hydroxyl/ketone/extra-carboxyl
 //! positions are carbon indices counted from C1 (the carboxyl carbon for
 //! acyl chains, C1 of the sphingoid base otherwise) — the same Δ-numbering
-//! LipidOracle's EAD engines use in their fragment labels.
+//! `LipidOracle`'s EAD engines use in their fragment labels.
 //!
 //! ## Shorthand vs explicit chains
 //!
@@ -23,7 +23,7 @@
 //! `/` between explicit chains means sn-position is known: chains are read
 //! positionally (sn1, sn2, sn3, ...) and rendered as one connected
 //! molecule. `_` means regiochemistry is *not* known (the classic
-//! bulk/species-level lipid shorthand, and also what LipidOracle's EAD
+//! bulk/species-level lipid shorthand, and also what `LipidOracle`'s EAD
 //! engines always use for DG/TG/CL regardless of how well the individual
 //! chains are localized) — in that case the chains are still written into
 //! the backbone in name order, but the atom each one hangs from is labelled `snN`
@@ -39,7 +39,7 @@
 //! *unlocalized* double bonds are represented with a CDK-style `Sg:n:`
 //! flexible-run marker plus an `x+y=N` size constraint, never with a
 //! guessed literal position. See `build_chain_segment` and
-//! `CxBuilder` for how a chain's local Sg:/m: blocks get offset and
+//! `CxBuilder` for how a chain's local <Sg:/m>: blocks get offset and
 //! merged into the surrounding headgroup template's global CXSMILES
 //! suffix. A double bond whose geometry is not explicit is left as a plain
 //! `C=C`, which is exactly what unspecified geometry means in SMILES;
@@ -178,7 +178,7 @@ struct ParsedChain {
 /// labels. Fully determined structures return plain SMILES. Unsupported or
 /// structurally under-specified names return `None`.
 ///
-/// Reference: https://egonw.github.io/cdk-cxsmiles/templates.html#lipids-with-two-double-bonds-somewhere-in-the-tail
+/// Reference: <https://egonw.github.io/cdk-cxsmiles/templates.html#lipids-with-two-double-bonds-somewhere-in-the-tail>
 pub(crate) fn generate_smiles(name: &str) -> Option<String> {
     let (canonical, tail) = crate::nomenclature::split_display_name(name);
     let built = build_lipid(&canonical, true)?;
@@ -259,15 +259,14 @@ fn attach_consensus(
             .flatten()
     });
 
-    let fields = match fields.contains('$') {
-        true => fields,
-        false => {
-            let block = label_block(&sites);
-            if fields.is_empty() {
-                block
-            } else {
-                format!("{block},{fields}")
-            }
+    let fields = if fields.contains('$') {
+        fields
+    } else {
+        let block = label_block(&sites);
+        if fields.is_empty() {
+            block
+        } else {
+            format!("{block},{fields}")
         }
     };
 
@@ -337,8 +336,7 @@ fn label_block(sites: &[(String, usize)]) -> String {
             sites
                 .iter()
                 .find(|(_, atom)| *atom == i)
-                .map(|(label, _)| label.as_str())
-                .unwrap_or("")
+                .map_or("", |(label, _)| label.as_str())
         })
         .collect();
     format!("${}$", labels.join(";"))
@@ -357,7 +355,7 @@ fn label_block(sites: &[(String, usize)]) -> String {
 ///   the padding atoms that expansion inserts.
 ///
 /// Atom indices are 0-based in SMILES emission order, which is the order
-/// RDKit (and every other parser) assigns when reading the string.
+/// `RDKit` (and every other parser) assigns when reading the string.
 pub(crate) fn generate_structure(name: &str) -> Option<LipidStructure> {
     let (canonical, _) = crate::nomenclature::split_display_name(name);
     let labels = chain_label_tokens(&canonical);
@@ -545,8 +543,8 @@ struct Built {
 
 impl Built {
     /// A structure with no chain mapping (fixed templates like sterol).
-    fn plain(smiles: String) -> Self {
-        Built {
+    const fn plain(smiles: String) -> Self {
+        Self {
             smiles,
             chains: Vec::new(),
             sn_sites: Vec::new(),
@@ -775,7 +773,7 @@ fn build_chain_segment(
         let sites = carbon_atoms
             .iter()
             .skip(skip)
-            .map(|a| a.to_string())
+            .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(".");
         if sites.is_empty() {
@@ -936,7 +934,7 @@ impl CxBuilder {
         let mut tokens = Vec::new();
 
         let mut sn_sites = self.sn_sites;
-        sn_sites.sort();
+        sn_sites.sort_unstable();
         let swappable = self.swappable && sn_sites.len() >= 2;
         if swappable {
             blocks.push(sn_label_block(&sn_sites));
@@ -1052,8 +1050,7 @@ fn offset_m_block(block: &str, atom_offset: usize) -> String {
         .split('.')
         .map(|p| {
             p.parse::<usize>()
-                .map(|v| (v + atom_offset).to_string())
-                .unwrap_or_else(|_| p.to_string())
+                .map_or_else(|_| p.to_string(), |v| (v + atom_offset).to_string())
         })
         .collect::<Vec<_>>()
         .join(".");
@@ -1143,7 +1140,7 @@ pub(crate) fn count_atoms(smiles: &str) -> usize {
 /// recognize atom-starting characters (including `insert_padding_atoms`)
 /// goes through this function so the accepted character set can't drift
 /// between call sites.
-pub(crate) fn starts_atom(c: char) -> bool {
+pub(crate) const fn starts_atom(c: char) -> bool {
     matches!(
         c,
         'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'b' | 'c' | 'n' | 'o' | 's' | 'p' | '*'
@@ -1151,10 +1148,10 @@ pub(crate) fn starts_atom(c: char) -> bool {
 }
 
 /// Resolves this generator's `Sg:n:pos:var:ht` unlocalized-double-bond
-/// markers (see module docs and [`build_chain_segment`]) into one
+/// markers (see module docs and `build_chain_segment`) into one
 /// concrete, fully-connected SMILES, for depiction purposes.
 ///
-/// External SMILES renderers (chematic, RDKit, ...) have no notion of
+/// External SMILES renderers (chematic, `RDKit`, ...) have no notion of
 /// these markers or of the `x+y=N` size constraint that goes with them —
 /// parsing just the base SMILES and ignoring the CXSMILES suffix leaves
 /// out most of the chain (the marker atoms stand in for a variable-length
@@ -1174,6 +1171,7 @@ pub(crate) fn starts_atom(c: char) -> bool {
 ///
 /// Returns the input unchanged if it has no CXSMILES suffix or nothing
 /// to expand.
+#[must_use]
 pub fn smiles_expand(smi: &str) -> String {
     expand_with_padding_inserts(smi).0
 }
@@ -1307,7 +1305,7 @@ fn insert_padding_atoms(smi: &str, inserts: &[(usize, usize)]) -> String {
                 }
             }
             if let Some(&n) = insert_map.get(&atom_idx) {
-                out.extend(std::iter::repeat_n('C', n));
+                out.extend(core::iter::repeat_n('C', n));
             }
             atom_idx += 1;
             continue;
@@ -1315,7 +1313,7 @@ fn insert_padding_atoms(smi: &str, inserts: &[(usize, usize)]) -> String {
         if starts_atom(c) {
             out.push(c);
             if let Some(&n) = insert_map.get(&atom_idx) {
-                out.extend(std::iter::repeat_n('C', n));
+                out.extend(core::iter::repeat_n('C', n));
             }
             atom_idx += 1;
         } else {
@@ -1840,7 +1838,6 @@ fn assemble_range(
 /// Used directly with `start == 1, end == carbon` for a normal chain, and
 /// with `start == 3` for a sphingoid base's own tail (C1/C2 are handled
 /// by the caller's fixed template).
-#[allow(clippy::too_many_arguments)]
 fn build_chain_range(
     carbon: u32,
     db_pos: &[DbPos],
@@ -2111,7 +2108,12 @@ fn sphingo_dispatch(chains: &[ParsedChain], head_tail: &str, has_n_acyl: bool) -
 }
 
 #[cfg(test)]
+#[path = "../tests/support/atoms.rs"]
+mod atoms;
+
+#[cfg(test)]
 mod tests {
+    use super::atoms::atom_symbols;
     use super::*;
 
     /// Cheap structural sanity check (not a real SMILES parser): every
@@ -2136,7 +2138,7 @@ mod tests {
         assert_eq!(bracket, 0, "unbalanced brackets in {smiles}");
 
         let mut ring_counts: HashMap<char, u32> = HashMap::new();
-        for c in body.chars().filter(|c| c.is_ascii_digit()) {
+        for c in body.chars().filter(char::is_ascii_digit) {
             *ring_counts.entry(c).or_insert(0) += 1;
         }
         for (digit, n) in ring_counts {
@@ -2146,37 +2148,6 @@ mod tests {
                 "ring closure digit {digit} used {n} times in {smiles}"
             );
         }
-    }
-
-    /// The element symbol of every atom in a plain SMILES, in emission
-    /// order — the indexing `LipidStructure::chains` refers to.
-    fn atom_symbols(smiles: &str) -> Vec<String> {
-        let chars: Vec<char> = smiles.chars().collect();
-        let mut out = Vec::new();
-        let mut i = 0usize;
-        while i < chars.len() {
-            match chars[i] {
-                '[' => {
-                    let start = i;
-                    while i < chars.len() && chars[i] != ']' {
-                        i += 1;
-                    }
-                    out.push(
-                        chars[start..=i.min(chars.len() - 1)]
-                            .iter()
-                            .collect::<String>(),
-                    );
-                    i += 1;
-                }
-                c @ ('B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' | 'c' | 'n' | 'o' | 's'
-                | 'p' | '*') => {
-                    out.push(c.to_string());
-                    i += 1;
-                }
-                _ => i += 1,
-            }
-        }
-        out
     }
 
     /// Every mapped carbon must actually be a carbon, the run must cover
@@ -2391,9 +2362,9 @@ mod tests {
         assert_balanced(&s);
         assert!(s.contains("[n+]1ccccc1"));
         assert!(s.contains("C(O)")); // localized hydroxyl
-                                     // All 4 double-bond positions are known and their cis/trans geometry
-                                     // is not, which a plain `C=C` already says: an undecorated double
-                                     // bond is unspecified geometry in SMILES, so there is nothing to add.
+        // All 4 double-bond positions are known and their cis/trans geometry
+        // is not, which a plain `C=C` already says: an undecorated double
+        // bond is unspecified geometry in SMILES, so there is nothing to add.
         assert_eq!(s.matches("C=C").count(), 4);
         assert!(
             !s.contains(" |"),
@@ -2583,7 +2554,7 @@ mod tests {
         let extra2 = placeholder_positions(8, &[], 2);
         // short chain: must still avoid adjacency between the two picks
         assert_eq!(extra2.len(), 2);
-        assert!((extra2[0] as i64 - extra2[1] as i64).abs() >= 2);
+        assert!((i64::from(extra2[0]) - i64::from(extra2[1])).abs() >= 2);
     }
 
     #[test]
@@ -2933,14 +2904,12 @@ mod tests {
         let carbon_count = expanded.chars().filter(|&c| c == 'C').count();
         assert_eq!(
             carbon_count, 18,
-            "expanded chain should have all 18 carbons: {}",
-            expanded
+            "expanded chain should have all 18 carbons: {expanded}"
         );
         assert_eq!(
             expanded.matches("C=C").count(),
             2,
-            "both double bonds should survive expansion: {}",
-            expanded
+            "both double bonds should survive expansion: {expanded}"
         );
     }
 
