@@ -24,6 +24,7 @@ use crate::reverse::{reachable_from, single_bond};
 /// CXSMILES is therefore a drawing representative, not a replacement for the
 /// original analytical record. Malformed or non-CXSMILES input is returned
 /// unchanged.
+#[must_use]
 pub fn smiles_for_depiction(smi: &str) -> String {
     let Some(canonical) = crate::canonicalize(smi) else {
         return smi.to_string();

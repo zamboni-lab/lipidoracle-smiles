@@ -50,7 +50,7 @@
 //! line on it and keep field 1 as the ID, so `Δ5 100%` becomes `5@100`. The
 //! tail is reconstructed in its original spelling on the way back out.
 
-use std::fmt::Write as _;
+use core::fmt::Write as _;
 
 /// One called position and the confidence behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,12 +226,11 @@ pub(crate) fn from_tokens(
                 if name == "mPos" {
                     kind = head[digits.len()..].to_string();
                 }
-                match (digits.parse(), percent.parse()) {
-                    (Ok(pos), Ok(percent)) => calls.push(Call { pos, percent }),
-                    _ => {
-                        ok = false;
-                        break;
-                    }
+                if let (Ok(pos), Ok(percent)) = (digits.parse(), percent.parse()) {
+                    calls.push(Call { pos, percent });
+                } else {
+                    ok = false;
+                    break;
                 }
             }
             if !ok || calls.is_empty() {
@@ -381,7 +380,11 @@ mod tests {
             let encoded = tokens(&parsed, false, |_| None).join(";");
             let decoded = from_tokens(&encoded, |anchor| anchor.strip_prefix("sn")?.parse().ok());
             assert_eq!(decoded, parsed, "tokens lost something: {encoded}");
-            assert_eq!(format_tail(&decoded, false).as_deref(), Some(tail), "{encoded}");
+            assert_eq!(
+                format_tail(&decoded, false).as_deref(),
+                Some(tail),
+                "{encoded}"
+            );
         }
     }
 

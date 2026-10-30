@@ -39,7 +39,7 @@ mod reverse;
 
 pub use cxsmiles::canonicalize;
 pub use depiction::smiles_for_depiction;
-pub use forward::{smiles_expand, ChainAtoms, LipidStructure};
+pub use forward::{ChainAtoms, LipidStructure, smiles_expand};
 
 /// Converts a Shorthand2020 lipid name into SMILES, or CXSMILES when
 /// something about the structure was not determined.
@@ -71,6 +71,7 @@ pub use forward::{smiles_expand, ChainAtoms, LipidStructure};
 /// // unsupported: sum composition only
 /// assert_eq!(name2smiles("PC 34:1"), None);
 /// ```
+#[must_use]
 pub fn name2smiles(name: &str) -> Option<String> {
     forward::generate_smiles(name)
 }
@@ -108,6 +109,7 @@ pub fn name2smiles(name: &str) -> Option<String> {
 /// * a trailing empty slot is dropped, so `DG 16:0/0:0` and `MG 16:0` are the
 ///   same string and both return `MG 16:0`;
 /// * accepted aliases normalize — `;ep(5)` returns as `;5Ep`.
+#[must_use]
 pub fn smiles2name(smiles: &str) -> Option<String> {
     reverse::parse_smiles(smiles)
 }
@@ -120,6 +122,7 @@ pub fn smiles2name(smiles: &str) -> Option<String> {
 /// markers are already expanded to one representative even split, and
 /// `_`-joined names are built as one representative assignment and flagged via
 /// [`LipidStructure::regio_resolved`].
+#[must_use]
 pub fn name2structure(name: &str) -> Option<LipidStructure> {
     forward::generate_structure(name)
 }
@@ -130,6 +133,7 @@ pub fn name2structure(name: &str) -> Option<LipidStructure> {
 /// Exposed because callers that localize double bonds need the same test:
 /// localizing a position within a *sum* composition would treat two real
 /// chains as if they were one.
+#[must_use]
 pub fn class_needs_multi_chain(class: &str) -> bool {
     forward::class_needs_multi_chain(class)
 }

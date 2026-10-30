@@ -23,6 +23,7 @@ use chematic_smiles::{canonical_atom_order, canonical_smiles, parse};
 /// Returns `None` if the base SMILES is invalid, the CX block is unterminated,
 /// or a recognized atom-indexed field is malformed or points outside the
 /// molecule.
+#[must_use]
 pub fn canonicalize(smi: &str) -> Option<String> {
     let ParsedCx {
         base,
@@ -378,7 +379,7 @@ mod tests {
         let input = "OCC |$left;;right$| swappable(left,right)";
         let out = canonicalize(input).unwrap();
         assert!(out.ends_with("| swappable(left,right)"), "{out}");
-        assert!(out.contains("$"));
+        assert!(out.contains('$'));
         assert_eq!(canonicalize(&out).as_deref(), Some(out.as_str()));
     }
 

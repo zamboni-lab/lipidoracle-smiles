@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use lipid_notation::{canonicalize, name2smiles, smiles2name, smiles_for_depiction};
+use lipid_notation::{canonicalize, name2smiles, smiles_for_depiction, smiles2name};
 
 const CDK_DEPICT_SVG: &str = "https://www.simolecule.com/cdkdepict/depict/bow/svg?smi=";
 
