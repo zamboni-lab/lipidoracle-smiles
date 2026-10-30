@@ -8,7 +8,7 @@
 //! other than the structure given.
 
 use crate::canonicalize;
-use crate::forward::{generate_smiles, trailer_equations, trailer_is_swappable, SUBSTITUENTS};
+use crate::forward::{SUBSTITUENTS, generate_smiles, trailer_equations, trailer_is_swappable};
 use chematic_core::{AtomIdx, BondOrder, Element, Molecule, MoleculeBuilder};
 use chematic_smiles::{canonical_smiles, parse};
 use std::collections::{HashMap, HashSet};
@@ -49,7 +49,7 @@ struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
-    fn split(smi: &'a str) -> Cx<'a> {
+    fn split(smi: &'a str) -> Self {
         let Some((base, tail)) = smi.split_once(" |") else {
             return Cx {
                 base: smi,
@@ -362,7 +362,7 @@ fn graph_candidates(canonical: &str) -> Vec<String> {
     out
 }
 
-fn sphingoid_graph_candidates(mol: &Molecule, cx: &Cx, main: &HashSet<usize>) -> Vec<String> {
+fn sphingoid_graph_candidates(mol: &Molecule, cx: &Cx<'_>, main: &HashSet<usize>) -> Vec<String> {
     let mut out = Vec::new();
     for (n_idx, atom) in mol.atoms() {
         if atom.element != Element::N {
@@ -477,7 +477,7 @@ fn sphingoid_graph_candidates(mol: &Molecule, cx: &Cx, main: &HashSet<usize>) ->
 
 fn graph_sphingoid_chain(
     mol: &Molecule,
-    cx: &Cx,
+    cx: &Cx<'_>,
     allowed: &HashSet<usize>,
     path: &[usize],
     nitrogen: usize,
@@ -535,23 +535,14 @@ fn graph_sphingoid_chain(
             {
                 continue;
             }
-            let path_attachments = branch_atoms
-                .iter()
-                .flat_map(|&atom| mol.neighbors(AtomIdx(atom as u32)))
-                .filter(|(atom, _)| carbon_set.contains(&(atom.0 as usize)))
-                .count();
-            if path_attachments == 2 && branch_atoms.len() == 1 && element(mol, root) == Element::O
-            {
-                let other = mol.neighbors(neighbor).find_map(|(atom, _)| {
-                    let atom = atom.0 as usize;
-                    (atom != carbon && carbon_set.contains(&atom)).then_some(atom)
-                })?;
-                let other_pos = path.iter().position(|x| *x == other)?;
-                chain.rings.push((
-                    pos.min(other_pos) as u32 + 1,
-                    pos.max(other_pos) as u32 + 1,
-                    true,
-                ));
+            if let Some(ring) = oxygen_bridge(
+                mol,
+                path,
+                &carbon_set,
+                &branch_atoms,
+                (pos, carbon, neighbor),
+            )? {
+                chain.rings.push(ring);
                 continue;
             }
             chain.mods.push((
@@ -567,7 +558,7 @@ fn graph_sphingoid_chain(
         chain.db.pop();
     }
     chain.db.sort();
-    chain.mods.sort();
+    chain.mods.sort_unstable();
     Some(chain)
 }
 
@@ -663,7 +654,7 @@ fn make_graph_template(
 
 fn match_graph_template(
     mol: &Molecule,
-    cx: &Cx,
+    cx: &Cx<'_>,
     main: &HashSet<usize>,
     template: &GraphTemplate,
     cuts: &[(usize, usize)],
@@ -726,7 +717,7 @@ fn match_graph_template(
 
 fn graph_chain(
     mol: &Molecule,
-    cx: &Cx,
+    cx: &Cx<'_>,
     component: &[usize],
     start: usize,
 ) -> Option<(Chain, HashSet<usize>)> {
@@ -796,23 +787,14 @@ fn graph_chain(
             }
             let branch_atoms = component_without(mol, root, &carbon_set, &allowed);
             handled.extend(branch_atoms.iter().copied());
-            let path_attachments = branch_atoms
-                .iter()
-                .flat_map(|&atom| mol.neighbors(AtomIdx(atom as u32)))
-                .filter(|(atom, _)| carbon_set.contains(&(atom.0 as usize)))
-                .count();
-            if path_attachments == 2 && branch_atoms.len() == 1 && element(mol, root) == Element::O
-            {
-                let other = mol.neighbors(neighbor).find_map(|(atom, _)| {
-                    let atom = atom.0 as usize;
-                    (atom != carbon && carbon_set.contains(&atom)).then_some(atom)
-                })?;
-                let other_pos = path.iter().position(|x| *x == other)?;
-                chain.rings.push((
-                    pos.min(other_pos) as u32 + 1,
-                    pos.max(other_pos) as u32 + 1,
-                    true,
-                ));
+            if let Some(ring) = oxygen_bridge(
+                mol,
+                &path,
+                &carbon_set,
+                &branch_atoms,
+                (pos, carbon, neighbor),
+            )? {
+                chain.rings.push(ring);
                 continue;
             }
             if pos == 0
@@ -833,14 +815,14 @@ fn graph_chain(
         chain.db.pop();
     }
     chain.db.sort();
-    chain.mods.sort();
-    chain.rings.sort();
+    chain.mods.sort_unstable();
+    chain.rings.sort_unstable();
     Some((chain, carbon_set))
 }
 
 fn add_floating_mods(
     mol: &Molecule,
-    cx: &Cx,
+    cx: &Cx<'_>,
     mut chain: Chain,
     carbons: &HashSet<usize>,
 ) -> Option<Chain> {
@@ -865,7 +847,7 @@ fn add_floating_mods(
             .push((0, branch_abbreviation(mol, &atoms, mol.bond(bond).order)?));
         let _ = root;
     }
-    chain.mods.sort();
+    chain.mods.sort_unstable();
     Some(chain)
 }
 
@@ -986,6 +968,40 @@ fn directed_marker(mol: &Molecule, from: usize, to: usize) -> Option<char> {
         }),
         _ => None,
     }
+}
+
+/// A branch that is one oxygen bonded back onto the chain closes an ether
+/// ring. `Some(Some(ring))` gives its 1-based chain positions, `Some(None)`
+/// means the branch is something else, and `None` that the bridge's far end
+/// is not on the path, so this is not a chain the reader handles.
+fn oxygen_bridge(
+    mol: &Molecule,
+    path: &[usize],
+    carbon_set: &HashSet<usize>,
+    branch_atoms: &[usize],
+    (pos, carbon, neighbor): (usize, usize, AtomIdx),
+) -> Option<Option<(u32, u32, bool)>> {
+    let path_attachments = branch_atoms
+        .iter()
+        .flat_map(|&atom| mol.neighbors(AtomIdx(atom as u32)))
+        .filter(|(atom, _)| carbon_set.contains(&(atom.0 as usize)))
+        .count();
+    if !(path_attachments == 2
+        && branch_atoms.len() == 1
+        && element(mol, neighbor.0 as usize) == Element::O)
+    {
+        return Some(None);
+    }
+    let other = mol.neighbors(neighbor).find_map(|(atom, _)| {
+        let atom = atom.0 as usize;
+        (atom != carbon && carbon_set.contains(&atom)).then_some(atom)
+    })?;
+    let other_pos = path.iter().position(|x| *x == other)?;
+    Some(Some((
+        pos.min(other_pos) as u32 + 1,
+        pos.max(other_pos) as u32 + 1,
+        true,
+    )))
 }
 
 fn component_without(
@@ -1123,7 +1139,7 @@ fn element(mol: &Molecule, atom: usize) -> Element {
     mol.atom(AtomIdx(atom as u32)).element
 }
 
-pub(crate) fn single_bond(order: BondOrder) -> bool {
+pub(crate) const fn single_bond(order: BondOrder) -> bool {
     matches!(order, BondOrder::Single | BondOrder::Up | BondOrder::Down)
 }
 
@@ -1137,6 +1153,15 @@ mod tests {
 
     fn round(name: &str) -> Option<String> {
         parse_smiles(&generate_smiles(name)?)
+    }
+
+    #[test]
+    fn epoxides_come_back_at_their_position() {
+        // An oxygen bridging two chain carbons is read back as an epoxide on the
+        // lower of the two positions, alone and on an esterified chain.
+        for name in ["FA 18:0;5Ep", "FA 18:0;9Ep", "CE 18:0;9Ep"] {
+            assert_eq!(round(name).as_deref(), Some(name), "{name}");
+        }
     }
 
     #[test]
