@@ -1,0 +1,5 @@
+toml-version = "v1.0.0"
+
+[format.rules]
+indent-style = "space"
+indent-width = 2

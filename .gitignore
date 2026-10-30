@@ -4,3 +4,5 @@ __pycache__/
 /dev
 /target
 
+lcov.info
+mutants.out*/

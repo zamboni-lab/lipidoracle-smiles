@@ -1,0 +1,11 @@
+[default.extend-words]
+# Chemistry: double-bond equivalent, and regio- (regiochemistry).
+DBE = "DBE"
+regio = "regio"
+
+[files]
+extend-exclude = [
+  "*.svg",
+  "Cargo.lock",
+  "target/",
+]

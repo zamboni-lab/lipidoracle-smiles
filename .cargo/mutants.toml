@@ -1,0 +1,14 @@
+# cargo-mutants config (its default location), read by `./mk mutants` and `./mk mutants-diff`.
+# Policy: zero missed mutants. Prefer a test that kills a mutant over an exclusion;
+# every `exclude_globs` / `exclude_re` entry needs a comment saying why no test can.
+
+exclude_re = [
+  # Equivalent mutants in `oxygen_bridge`: a bridged ring prints only its start
+  # (`;5Ep`), so the end's `+ 1` is never observable, and finding the current
+  # carbon instead of its partner (`!=`, `&&` in the `find_map`) yields the
+  # same start, because the bridge is found from its lower carbon first.
+  # Pinned to line:column so a moved line fails the gate instead of hiding a mutant.
+  "src/reverse\\.rs:968:35: replace \\+ with [-*] in oxygen_bridge",
+  "src/reverse\\.rs:963:15: replace != with == in oxygen_bridge",
+  "src/reverse\\.rs:963:25: replace && with \\|\\| in oxygen_bridge",
+]

@@ -1,0 +1,16 @@
+# Repository-specific settings for ./mk. Sourced by ./mk after mk.versions.
+# Everything here belongs to this repository; mk and mk.versions are standard
+# and kept in sync by the template's scripts/adopt.sh.
+#
+# LOCAL_CI_GATES=(task ...)       cargo-make tasks added to ./mk ci (shown as local:task)
+# LOCAL_NIGHTLY_GATES=(task ...)  cargo-make tasks added to ./mk ci-nightly
+# LOCAL_OVERRIDES=(gate=task ...) standard gates run as this repository's own cargo-make
+#                                 task (`gate` alone: same name); say why next to each one
+# LOCAL_SETUP=(task ...)          cargo-make tasks ./mk setup runs in every tier, CI included,
+#                                 for installs LOCAL_CARGO_TOOLS cannot express
+# LOCAL_CARGO_TOOLS=(crate@x.y.z) extra tools, installed and version-checked like mk.versions
+#                                 (`crate@x.y.z:binary` when the binary has another name)
+# LOCAL_SYSTEM_PACKAGES=(pkg ...) apt packages ./mk setup installs on CI (Linux runners)
+#
+# Any ./mk task name the standard runner does not know runs that cargo-make task.
+

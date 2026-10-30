@@ -1,0 +1,21 @@
+# prek hooks. The standard ones only call `./mk`, so hooks, local runs and CI
+# are one gate: fast checks on commit, the whole of `./mk ci` on push.
+
+default_install_hook_types = ["pre-commit", "pre-push"]
+default_stages = ["pre-commit"]
+fail_fast = false
+
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v6.0.0"
+hooks = [{ id = "check-added-large-files", args = ["--maxkb=2048"] }, { id = "check-case-conflict" }, { id = "check-merge-conflict" }, { id = "check-symlinks" }, { id = "check-executables-have-shebangs" }, { id = "check-shebang-scripts-are-executable" }, { id = "check-toml" }, { id = "check-json" }, { id = "check-yaml" }, { id = "end-of-file-fixer", exclude = "(public/assets/)" }, { id = "mixed-line-ending" }, { id = "trailing-whitespace", exclude = "(public/assets/)" }]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "fmt", name = "./mk fmt", language = "system", entry = "./mk fmt", pass_filenames = false, always_run = true },
+  { id = "tombi", name = "./mk tombi", language = "system", entry = "./mk tombi", pass_filenames = false, always_run = true },
+  { id = "typos", name = "./mk typos", language = "system", entry = "./mk typos", pass_filenames = false, always_run = true },
+  { id = "shell", name = "./mk shell", language = "system", entry = "./mk shell", pass_filenames = false, always_run = true },
+  { id = "ci", name = "./mk ci", language = "system", entry = "./mk ci", pass_filenames = false, always_run = true, stages = ["pre-push"] },
+]

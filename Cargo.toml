@@ -2,13 +2,96 @@
 name = "lipid_notation"
 version = "0.1.2"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"  # let-chains, used by chematic-core
 description = "Convert Shorthand2020 lipid names to SMILES/CXSMILES, encoding what was and wasn't determined"
-license = "MIT"
 repository = "https://github.com/zamboni-lab/lipidoracle-smiles"
-keywords = ["lipidomics", "smiles", "cxsmiles", "cheminformatics", "lipids"]
+license = "MIT"
+keywords = ["cheminformatics", "cxsmiles", "lipidomics", "lipids", "smiles"]
 categories = ["science"]
 
 [dependencies]
 chematic-core = "0.9"
 chematic-smiles = "0.9"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# Curated `restriction` lints: each prevents a real bug class at little noise.
+alloc_instead_of_core = "warn"
+# Every suppression is an `#[expect(..., reason = "...")]`: it fails once it is no longer needed.
+allow_attributes = "deny"
+# Ratchet (2026-10-30): template lints this code does not pass yet, with their
+# finding count at adoption. Fix a lint, delete its line; never add one.
+allow_attributes_without_reason = "allow"  # 1 findings
+branches_sharing_code = "allow"  # 1 findings
+cast_possible_truncation = "allow"  # 49 findings
+clone_on_ref_ptr = "warn"
+create_dir = "warn"
+dbg_macro = "deny"
+empty_structs_with_brackets = "warn"
+exit = "warn"
+expect_used = "allow"  # 68 findings
+filetype_is_file = "warn"
+float_cmp_const = "warn"
+fn_to_numeric_cast_any = "warn"
+format_push_string = "allow"  # 12 findings
+get_unwrap = "warn"
+if_then_some_else_none = "warn"
+indexing_slicing = "allow"  # 93 findings
+infinite_loop = "warn"
+large_include_file = "warn"
+let_underscore_must_use = "allow"  # 1 findings
+lossy_float_literal = "warn"
+mem_forget = "warn"
+missing_assert_message = "allow"  # 7 findings
+mixed_read_write_in_expression = "warn"
+mod_module_files = "warn"
+multiple_inherent_impl = "warn"
+needless_pass_by_value = "allow"  # 1 findings
+nursery = { level = "warn", priority = -1 }
+option_if_let_else = "allow"  # 4 findings
+option_option = "allow"  # 1 findings
+panic = "allow"  # 22 findings
+pedantic = { level = "warn", priority = -1 }
+print_stderr = "warn"
+print_stdout = "allow"  # 3 findings
+rc_buffer = "warn"
+rc_mutex = "warn"
+# Contradicts rustc's `unreachable_pub` (one asks for `pub`, the other `pub(crate)`).
+redundant_pub_crate = "allow"
+rest_pat_in_fully_bound_structs = "warn"
+same_name_method = "warn"
+std_instead_of_alloc = "warn"
+std_instead_of_core = "warn"
+string_slice = "allow"  # 37 findings
+todo = "deny"
+too_many_lines = "allow"  # 2 findings
+try_err = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "deny"
+unnecessary_self_imports = "warn"
+unneeded_field_pattern = "warn"
+unwrap_in_result = "warn"
+unwrap_used = "allow"  # 43 findings
+verbose_file_reads = "warn"
+
+[lints.rust]
+missing_debug_implementations = "warn"
+# Ratchet (2026-10-30): template lints this code does not pass yet, with their
+# finding count at adoption. Fix a lint, delete its line; never add one.
+missing_docs = "allow"  # 2 findings
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "warn"
+unsafe_code = "forbid"
+unused_lifetimes = "warn"
+unused_qualifications = "warn"
+
+[lints.rustdoc]
+bare_urls = "warn"
+broken_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "warn"
+invalid_rust_codeblocks = "deny"
+missing_crate_level_docs = "warn"
+private_intra_doc_links = "warn"
+redundant_explicit_links = "warn"
+unescaped_backticks = "warn"
