@@ -7,9 +7,6 @@
 //!   recorded from the output: carbon counts, which atoms a block may point
 //!   at, which constructs are allowed to appear at all. These are the checks
 //!   that validate the encoded structure independently.
-//!
-//! Regenerate the golden file after a deliberate encoding change with
-//! `cargo run --example bless_testdata`, then read the diff carefully.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
