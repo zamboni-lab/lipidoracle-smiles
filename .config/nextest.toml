@@ -1,0 +1,14 @@
+# nextest profiles (https://nexte.st/book/configuration.html).
+# Note: nextest does not run doctests; `./mk test` runs doctests alongside unit/integration tests.
+
+[profile.default]
+fail-fast = true
+retries = 0
+
+[profile.ci]
+retries = 0
+fail-fast = false
+junit.path = "ci-junit.xml"
+status-level = "fail"
+final-status-level = "fail"
+slow-timeout = { period = "60s" }

@@ -6,3 +6,5 @@ __pycache__/
 
 lcov.info
 mutants.out*/
+.vscode/*
+!.vscode/settings.json
