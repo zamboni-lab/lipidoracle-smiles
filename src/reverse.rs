@@ -71,15 +71,14 @@ impl<'a> Cx<'a> {
                 if let Some(Ok(atom)) = rest.split(':').next().map(str::parse) {
                     sg.push(atom);
                 }
-            } else if let Some(rest) = block.strip_prefix("m:") {
-                if let Some((idx, sites)) = rest.split_once(':') {
-                    if let Ok(idx) = idx.parse() {
-                        m.push((
-                            idx,
-                            sites.split('.').filter_map(|s| s.parse().ok()).collect(),
-                        ));
-                    }
-                }
+            } else if let Some(rest) = block.strip_prefix("m:")
+                && let Some((idx, sites)) = rest.split_once(':')
+                && let Ok(idx) = idx.parse()
+            {
+                m.push((
+                    idx,
+                    sites.split('.').filter_map(|s| s.parse().ok()).collect(),
+                ));
             }
         }
 
@@ -290,10 +289,10 @@ fn consensus_tails(canonical: &str) -> Vec<Option<String>> {
                 .and_then(|n| n.parse().ok())
                 .or(Some(assumed_sn))
         });
-        if let Some(tail) = crate::consensus::format_tail(&entries, single_chain) {
-            if !out.contains(&Some(tail.clone())) {
-                out.push(Some(tail));
-            }
+        if let Some(tail) = crate::consensus::format_tail(&entries, single_chain)
+            && !out.contains(&Some(tail.clone()))
+        {
+            out.push(Some(tail));
         }
     }
     out.push(None);

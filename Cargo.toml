@@ -1,8 +1,8 @@
 [package]
 name = "lipid_notation"
 version = "0.1.2"
-edition = "2021"
-rust-version = "1.88"  # let-chains, used by chematic-core
+edition = "2024"
+rust-version = "1.99.1"
 description = "Convert Shorthand2020 lipid names to SMILES/CXSMILES, encoding what was and wasn't determined"
 repository = "https://github.com/zamboni-lab/lipidoracle-smiles"
 license = "MIT"
@@ -10,8 +10,8 @@ keywords = ["cheminformatics", "cxsmiles", "lipidomics", "lipids", "smiles"]
 categories = ["science"]
 
 [dependencies]
-chematic-core = "0.9"
-chematic-smiles = "0.9"
+chematic-core = "1.2.1"
+chematic-smiles = "1.2.1"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

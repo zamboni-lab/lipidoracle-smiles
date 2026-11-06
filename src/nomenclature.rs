@@ -11,13 +11,14 @@
 /// tokens (see `crate::consensus`).
 pub(crate) fn split_display_name(name: &str) -> (String, Option<String>) {
     let trimmed = name.trim();
-    if let Some(start) = trimmed.find(" [") {
-        if trimmed.ends_with(']') && start > 0 {
-            return (
-                trimmed[..start].trim_end().to_string(),
-                Some(trimmed[start + 1..].to_string()),
-            );
-        }
+    if let Some(start) = trimmed.find(" [")
+        && trimmed.ends_with(']')
+        && start > 0
+    {
+        return (
+            trimmed[..start].trim_end().to_string(),
+            Some(trimmed[start + 1..].to_string()),
+        );
     }
     (trimmed.to_string(), None)
 }

@@ -1462,7 +1462,7 @@ fn parse_chain_token(tok: &str) -> Option<ParsedChain> {
     let db_digits_end = rest
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(rest.len());
-    let db_declared: u32 = rest[..db_digits_end].parse().ok()?;
+    let db_declared: usize = rest[..db_digits_end].parse().ok()?;
     let mut cursor = &rest[db_digits_end..];
 
     let mut given_db = Vec::new();
@@ -1495,10 +1495,10 @@ fn parse_chain_token(tok: &str) -> Option<ParsedChain> {
         )?;
     }
 
-    if given_db.len() > db_declared as usize {
+    if given_db.len() > db_declared {
         return None; // more positions given than the declared count -- malformed
     }
-    let missing = db_declared as usize - given_db.len();
+    let missing = db_declared - given_db.len();
     let existing_positions: Vec<u32> = given_db.iter().map(|&(p, _)| p).collect();
     let extra = placeholder_positions(carbon, &existing_positions, missing);
     if extra.len() < missing {
@@ -1601,7 +1601,8 @@ fn parse_modification_segment(
             mods.push(Mod { pos, branch });
         } else if UNRENDERABLE.contains(&abbr) {
             return None;
-        } else if let Some(digits) = abbr.strip_prefix('O') {
+        } else {
+            let digits = abbr.strip_prefix('O')?;
             // A bare oxygen count, e.g. `;O2`. It carries no position, and
             // `pos` is part of the count's own token, so nothing is stored.
             *oxy_declared = if digits.is_empty() {
@@ -1609,8 +1610,6 @@ fn parse_modification_segment(
             } else {
                 digits.parse().ok()?
             };
-        } else {
-            return None; // unrecognized functional group
         }
     }
     Some(())
@@ -1819,11 +1818,11 @@ fn assemble_range(
         carbon_atoms.push(atom_idx);
         atom_idx += count_atoms(tok);
         out.push_str(tok);
-        if k < end {
-            if let Some(b) = bonds.get(&k) {
-                out.push_str(b);
-                atom_idx += count_atoms(b);
-            }
+        if k < end
+            && let Some(b) = bonds.get(&k)
+        {
+            out.push_str(b);
+            atom_idx += count_atoms(b);
         }
     }
     (out, carbon_atoms)

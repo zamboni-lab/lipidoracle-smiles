@@ -1,6 +1,9 @@
 //! CXSMILES adjustments for predictable lipid depictions.
 
-use std::collections::{HashSet, VecDeque};
+extern crate alloc;
+
+use alloc::collections::VecDeque;
+use std::collections::HashSet;
 
 use chematic_core::{AtomIdx, BondOrder, Element, Molecule};
 use chematic_smiles::parse;
