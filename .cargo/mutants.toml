@@ -12,3 +12,6 @@ exclude_re = [
   "src/reverse\\.rs:963:15: replace != with == in oxygen_bridge",
   "src/reverse\\.rs:963:25: replace && with \\|\\| in oxygen_bridge",
 ]
+
+test_tool = "nextest"
+timeout_multiplier = 1.5
