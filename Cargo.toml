@@ -1,6 +1,6 @@
 [package]
 name = "lipid_notation"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 rust-version = "1.85"
 description = "Convert Shorthand2020 lipid names to SMILES/CXSMILES, encoding what was and wasn't determined"

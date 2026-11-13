@@ -1412,6 +1412,14 @@ fn parse_chain_token(tok: &str) -> Option<ParsedChain> {
 
     let mut prefix = ChainPrefix::Acyl;
     let mut s = tok;
+    let mut branch_offset: Option<u32> = None;
+    if let Some(rest) = s.strip_prefix("iso-") {
+        branch_offset = Some(1);
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix("anteiso-") {
+        branch_offset = Some(2);
+        s = rest;
+    }
     if let Some(rest) = s.strip_prefix("O-") {
         prefix = ChainPrefix::EtherAlkyl;
         s = rest;
@@ -1429,9 +1437,29 @@ fn parse_chain_token(tok: &str) -> Option<ParsedChain> {
         prefix = ChainPrefix::SphingoidT;
         s = &s[1..];
     }
+    if branch_offset.is_none() {
+        if let Some(rest) = s.strip_prefix("iso-") {
+            branch_offset = Some(1);
+            s = rest;
+        } else if let Some(rest) = s.strip_prefix("anteiso-") {
+            branch_offset = Some(2);
+            s = rest;
+        }
+    }
 
     let (c_str, rest) = s.split_once(':')?;
-    let carbon: u32 = c_str.parse().ok()?;
+    let mut carbon: u32 = c_str.parse().ok()?;
+    let mut mods = Vec::new();
+    if let Some(offset) = branch_offset {
+        if carbon < offset + 3 {
+            return None;
+        }
+        carbon -= 1;
+        mods.push(Mod {
+            pos: carbon - offset,
+            branch: "C",
+        });
+    }
 
     let db_digits_end = rest
         .find(|c: char| !c.is_ascii_digit())
@@ -1446,7 +1474,6 @@ fn parse_chain_token(tok: &str) -> Option<ParsedChain> {
         cursor = &after_paren[end + 1..];
     }
 
-    let mut mods = Vec::new();
     let mut rings = Vec::new();
     let mut ring_db = Vec::new();
     let mut oxy_declared: u32 = 0;
@@ -3289,6 +3316,38 @@ mod tests {
         assert_chain_map_sane(
             "CL 22:6_22:6_22:6_22:6",
             &[(1, 22), (2, 22), (3, 22), (4, 22)],
+        );
+    }
+
+    #[test]
+    fn branched_iso_anteiso_hydroperoxy_and_epoxy_chains_render_valid_smiles() {
+        let iso15 = generate_smiles("FA iso-15:0").unwrap_or_default();
+        let explicit_iso15 = generate_smiles("FA 14:0;13Me").unwrap_or_default();
+        assert_ne!(iso15, "");
+        assert_balanced(&iso15);
+        assert_eq!(iso15, explicit_iso15);
+
+        let anteiso15 = generate_smiles("FA anteiso-15:0").unwrap_or_default();
+        let explicit_anteiso15 = generate_smiles("FA 14:0;12Me").unwrap_or_default();
+        assert_ne!(anteiso15, "");
+        assert_balanced(&anteiso15);
+        assert_eq!(anteiso15, explicit_anteiso15);
+        assert_ne!(iso15, anteiso15);
+
+        let ooh = generate_smiles("FA 18:2(9Z,12Z);13OOH").unwrap_or_default();
+        assert_ne!(ooh, "");
+        assert_balanced(&ooh);
+        assert!(
+            ooh.contains("OO"),
+            "13OOH should emit hydroperoxy branch OO: {ooh}"
+        );
+
+        let ep = generate_smiles("FA 18:1(9Z);12Ep").unwrap_or_default();
+        assert_ne!(ep, "");
+        assert_balanced(&ep);
+        assert!(
+            ep.contains("O1") || ep.contains("%10OC%10"),
+            "12Ep should emit oxirane ring closure: {ep}"
         );
     }
 }
