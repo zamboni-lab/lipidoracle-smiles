@@ -2,7 +2,7 @@
 name = "lipid_notation"
 version = "0.1.2"
 edition = "2024"
-rust-version = "1.99.1"
+rust-version = "1.100.0"
 description = "Convert Shorthand2020 lipid names to SMILES/CXSMILES, encoding what was and wasn't determined"
 repository = "https://github.com/zamboni-lab/lipidoracle-smiles"
 license = "MIT"
