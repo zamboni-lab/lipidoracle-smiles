@@ -76,7 +76,7 @@
 //! glycosidic linkage positions, so there is no honest single structure to
 //! emit and they are not handled here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Geometry {
@@ -682,7 +682,7 @@ fn build_chain_segment(
     let mut carbon_atoms;
 
     if unlocalized_count == 0 {
-        (smiles, carbon_atoms) = build_chain_range(
+        (smiles, carbon_atoms, _) = build_chain_range(
             carbon,
             &localized,
             &known_mods,
@@ -707,7 +707,8 @@ fn build_chain_segment(
         }
         prefix_len = prefix_len.min(carbon);
 
-        (smiles, carbon_atoms) = build_chain_range(
+        let trailing_dir;
+        (smiles, carbon_atoms, trailing_dir) = build_chain_range(
             carbon,
             &localized,
             &known_mods,
@@ -723,10 +724,13 @@ fn build_chain_segment(
         if remaining_length < 2 * unlocalized_count as u32 + 2 {
             return None;
         }
-        let var_names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
-        let num_markers = (unlocalized_count + 1).min(var_names.len());
+        let num_markers = unlocalized_count + 1;
+        let local_vars: Vec<String> = (0..num_markers).map(sg_var_name).collect();
         let prefix_atom_count = count_atoms(&smiles);
 
+        if let Some(dir) = &trailing_dir {
+            smiles.push_str(dir);
+        }
         smiles.push('C');
         for _ in 0..unlocalized_count.saturating_sub(1) {
             smiles.push_str("C=C");
@@ -741,7 +745,7 @@ fn build_chain_segment(
             carbon_atoms.push(prefix_atom_count + i);
         }
 
-        for (i, &var) in var_names.iter().enumerate().take(num_markers) {
+        for (i, var) in local_vars.iter().enumerate() {
             let atom = if i + 1 == num_markers {
                 // The last variable is anchored on the terminal carbon of
                 // the C=CC suffix; the other variables begin at every other
@@ -750,19 +754,11 @@ fn build_chain_segment(
             } else {
                 prefix_atom_count + i * 2
             };
-            sg_blocks.push(format!("Sg:n:{}:{}:ht", atom, var));
+            sg_blocks.push(format!("Sg:n:{atom}:{var}:ht"));
         }
         // Fixed scaffold atoms are excluded from the variable-length total.
         let constraint_sum = remaining_length.saturating_sub(unlocalized_count as u32 + 1);
-        constraint = Some(format!(
-            "{}={}",
-            var_names[..num_markers]
-                .iter()
-                .map(|v| v.to_string())
-                .collect::<Vec<_>>()
-                .join("+"),
-            constraint_sum
-        ));
+        constraint = Some(format!("{}={constraint_sum}", local_vars.join("+")));
     }
 
     let mut m_blocks = Vec::new();
@@ -889,14 +885,8 @@ impl CxBuilder {
     /// blocks and constraint into this assembly's global numbering.
     fn push_fragment(&mut self, frag: &CxFragment) {
         let local_var_count = frag.sg_blocks.len();
-        let var_names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
-        let renaming: HashMap<char, char> = (0..local_var_count)
-            .map(|i| {
-                (
-                    var_names[i],
-                    var_names[(self.var_offset + i) % var_names.len()],
-                )
-            })
+        let renaming: HashMap<String, String> = (0..local_var_count)
+            .map(|i| (sg_var_name(i), sg_var_name(self.var_offset + i)))
             .collect();
 
         for sg in &frag.sg_blocks {
@@ -1007,9 +997,29 @@ fn sn_label_block(sites: &[(usize, usize)]) -> String {
     format!("${}$", labels.join(";"))
 }
 
+/// Names the `index`-th `Sg:n` repeat variable: `'a'..='z'` followed by
+/// `"aa".."zz"`.
+fn sg_var_name(index: usize) -> String {
+    const LETTERS: usize = 26;
+    const PAIRS: usize = LETTERS * LETTERS;
+    let idx = index % (LETTERS + PAIRS);
+    if idx < LETTERS {
+        String::from(('a'..='z').nth(idx).unwrap_or('a'))
+    } else {
+        let pair = idx - LETTERS;
+        let hi = ('a'..='z').nth(pair / LETTERS).unwrap_or('a');
+        let lo = ('a'..='z').nth(pair % LETTERS).unwrap_or('a');
+        format!("{hi}{lo}")
+    }
+}
+
 /// Rewrites a `"Sg:n:LOCAL_POS:VAR:ht"` block to global atom numbering
-/// and a possibly-renamed variable letter.
-fn offset_sg_block(block: &str, atom_offset: usize, var_renaming: &HashMap<char, char>) -> String {
+/// and a possibly-renamed variable name.
+fn offset_sg_block(
+    block: &str,
+    atom_offset: usize,
+    var_renaming: &HashMap<String, String>,
+) -> String {
     let colons: Vec<usize> = block.match_indices(':').map(|(i, _)| i).collect();
     if colons.len() < 3 {
         return block.to_string();
@@ -1022,9 +1032,9 @@ fn offset_sg_block(block: &str, atom_offset: usize, var_renaming: &HashMap<char,
         .find(':')
         .map(|i| var_start + i)
         .unwrap_or(block.len());
-    let var_char = block[var_start..var_end].chars().next().unwrap_or('a');
-    let new_var = var_renaming.get(&var_char).copied().unwrap_or(var_char);
-    format!("Sg:n:{}:{}:ht", pos + atom_offset, new_var)
+    let var_str = &block[var_start..var_end];
+    let new_var = var_renaming.get(var_str).map_or(var_str, String::as_str);
+    format!("Sg:n:{}:{new_var}:ht", pos + atom_offset)
 }
 
 /// Rewrites a `"m:LOCAL_ATOM_IDX:LOCAL_POS.LOCAL_POS..."` block to
@@ -1084,13 +1094,18 @@ fn offset_ring_labels(smiles: &str, offset: usize) -> (String, usize) {
     (out, seen.len())
 }
 
-/// Renames every variable letter in a `"a+b=N"`-style constraint per
+/// Renames every variable token in a `"a+b=N"`-style constraint per
 /// `var_renaming`, leaving `+`/`=`/digits untouched.
-fn rename_constraint_vars(constraint: &str, var_renaming: &HashMap<char, char>) -> String {
-    constraint
-        .chars()
-        .map(|c| var_renaming.get(&c).copied().unwrap_or(c))
-        .collect()
+fn rename_constraint_vars(constraint: &str, var_renaming: &HashMap<String, String>) -> String {
+    let Some((lhs, rhs)) = constraint.split_once('=') else {
+        return constraint.to_string();
+    };
+    let renamed_lhs = lhs
+        .split('+')
+        .map(|v| var_renaming.get(v).map_or(v, String::as_str))
+        .collect::<Vec<_>>()
+        .join("+");
+    format!("{renamed_lhs}={rhs}")
 }
 
 /// Every atom token in a SMILES string, across all dot-separated
@@ -1692,7 +1707,7 @@ fn chain_tokens(
     mods: &[Mod],
     rings: &[Ring],
 ) -> (Vec<String>, HashMap<u32, String>) {
-    let db_start: HashMap<u32, DbPos> = db_pos.iter().map(|d| (d.pos, *d)).collect();
+    let db_start: BTreeMap<u32, DbPos> = db_pos.iter().map(|d| (d.pos, *d)).collect();
 
     let mut labels: HashMap<u32, String> = HashMap::new();
     let mut bonds: HashMap<u32, String> = HashMap::new();
@@ -1728,14 +1743,25 @@ fn chain_tokens(
     }
     for (&k, d) in &db_start {
         if let Some(g) = d.geom {
-            if k > 1 {
-                bonds.entry(k - 1).or_insert_with(|| "/".to_string());
-            }
+            let open_up = if k > 1 {
+                match bonds.get(&(k - 1)).map(String::as_str) {
+                    Some("\\") => false,
+                    Some("/") => true,
+                    None => {
+                        bonds.insert(k - 1, "/".to_string());
+                        true
+                    }
+                    Some(_) => true,
+                }
+            } else {
+                true
+            };
             if k + 1 < carbon {
-                let sym = match g {
-                    Geometry::Cis => "\\",
-                    Geometry::Trans => "/",
+                let close_up = match g {
+                    Geometry::Cis => !open_up,
+                    Geometry::Trans => open_up,
                 };
+                let sym = if close_up { "/" } else { "\\" };
                 bonds.entry(k + 1).or_insert_with(|| sym.to_string());
             }
         }
@@ -1758,6 +1784,11 @@ fn assemble_range(
     let mut out = String::new();
     let mut carbon_atoms = Vec::with_capacity((end.saturating_sub(start) + 1) as usize);
     let mut atom_idx = 0usize;
+    if start > 1 {
+        if let Some(b @ ("/" | "\\")) = bonds.get(&(start - 1)).map(String::as_str) {
+            out.push_str(b);
+        }
+    }
     for k in start..=end {
         let tok = &atoms[(k - 1) as usize];
         carbon_atoms.push(atom_idx);
@@ -1791,15 +1822,20 @@ fn build_chain_range(
     carbonyl_c1: bool,
     start: u32,
     end: u32,
-) -> (String, Vec<usize>) {
+) -> (String, Vec<usize>, Option<String>) {
     if carbon == 0 || end < start {
-        return (String::new(), Vec::new());
+        return (String::new(), Vec::new(), None);
     }
     let (mut atoms, bonds) = chain_tokens(carbon, db_pos, mods, rings);
     if carbonyl_c1 {
         atoms[0] = "C(=O)".to_string();
     }
-    assemble_range(&atoms, &bonds, start, end)
+    let trailing_dir = bonds
+        .get(&end)
+        .filter(|b| matches!(b.as_str(), "/" | "\\"))
+        .cloned();
+    let (out, carbon_atoms) = assemble_range(&atoms, &bonds, start, end);
+    (out, carbon_atoms, trailing_dir)
 }
 
 // ---------- headgroup builders ----------
@@ -3138,5 +3174,121 @@ mod tests {
             let cxsmiles = generate_smiles(name).unwrap_or_else(|| panic!("{name} should resolve"));
             assert!(cxsmiles.contains("Sg:"), "{name}: {cxsmiles}");
         }
+    }
+
+    #[test]
+    fn conjugated_polyene_stereobonds_are_deterministic_and_parity_consistent() {
+        let cases = [
+            ("FA 18:2(9Z,11Z)", "OC(=O)CCCCCCC/C=C\\C=C/CCCCCC"),
+            ("FA 18:2(9Z,11E)", "OC(=O)CCCCCCC/C=C\\C=C\\CCCCCC"),
+            ("FA 18:2(9E,11Z)", "OC(=O)CCCCCCC/C=C/C=C\\CCCCCC"),
+            ("FA 18:2(9E,11E)", "OC(=O)CCCCCCC/C=C/C=C/CCCCCC"),
+            ("FA 18:3(9Z,11E,13Z)", "OC(=O)CCCCCCC/C=C\\C=C\\C=C/CCCC"),
+        ];
+        for (name, expected) in cases {
+            let smi = generate_smiles(name);
+            assert_eq!(
+                smi.as_deref(),
+                Some(expected),
+                "conjugated SMILES mismatch for {name}"
+            );
+            assert_balanced(expected);
+        }
+        // Unsorted input positions must emit identical deterministic SMILES.
+        assert_eq!(
+            generate_smiles("FA 18:2(11E,9Z)"),
+            generate_smiles("FA 18:2(9Z,11E)"),
+            "conjugated stereobonds must not depend on input DB order"
+        );
+    }
+
+    #[test]
+    fn partially_localized_chain_preserves_closing_stereobond() {
+        let z = generate_smiles("FA 18:2(9Z)").unwrap_or_default();
+        let e = generate_smiles("FA 18:2(9E)").unwrap_or_default();
+        assert_balanced(&z);
+        assert_balanced(&e);
+        assert_ne!(z, e, "FA 18:2(9Z) and FA 18:2(9E) must differ");
+        assert!(
+            z.contains("/C=C\\CC=CC"),
+            "9Z should close with \\ before tail: {z}"
+        );
+        assert!(
+            e.contains("/C=C/CC=CC"),
+            "9E should close with / before tail: {e}"
+        );
+        assert!(
+            smiles_expand(&z).contains("/C=C\\"),
+            "expanded 9Z must retain cis stereobond: {z}"
+        );
+        assert!(
+            smiles_expand(&e).contains("/C=C/"),
+            "expanded 9E must retain trans stereobond: {e}"
+        );
+        assert_chain_map_sane("FA 18:2(9Z)", &[(1, 18)]);
+        assert_chain_map_sane("PC 16:0/18:2(9Z)", &[(1, 16), (2, 18)]);
+    }
+
+    #[test]
+    fn sphingoid_delta3_emits_opening_stereobond() {
+        let e3 = generate_smiles("Cer d18:1(3E)/16:0").unwrap_or_default();
+        let z3 = generate_smiles("Cer d18:1(3Z)/16:0").unwrap_or_default();
+        assert_balanced(&e3);
+        assert_balanced(&z3);
+        assert_ne!(e3, z3, "Cer d18:1(3E)/16:0 and 3Z must differ");
+        assert!(e3.contains(")/C(O)=C/"), "3E must emit / before C3: {e3}");
+        assert!(
+            z3.contains(")/C(O)=C\\"),
+            "3Z must emit / before C3 and \\ after C4: {z3}"
+        );
+        assert_chain_map_sane("Cer d18:1(3E)/16:0", &[(1, 18), (2, 16)]);
+        assert_chain_map_sane("Cer d18:1(3Z)/16:0", &[(1, 18), (2, 16)]);
+
+        let e4 = generate_smiles("Cer d18:1(4E)/16:0").unwrap_or_default();
+        assert_balanced(&e4);
+        assert!(
+            e4.contains(")C(O)/C=C/"),
+            "4E must keep C2-C3 plain and C3-C4 /: {e4}"
+        );
+    }
+
+    #[test]
+    fn sg_polymer_variables_never_collide_above_ten_segments() {
+        for name in [
+            "CL 18:2_18:2_18:2_18:2",
+            "PC 22:6_22:6",
+            "CL 22:6_22:6_22:6_22:6",
+            "FA 32:10",
+        ] {
+            let smi = generate_smiles(name).unwrap_or_default();
+            assert!(!smi.is_empty(), "{name} should generate CXSMILES");
+            assert_balanced(&smi);
+            let blocks = smi
+                .split(" |")
+                .nth(1)
+                .and_then(|s| s.split('|').next())
+                .unwrap_or("");
+            let vars: Vec<&str> = blocks
+                .split(',')
+                .filter_map(|b| b.strip_prefix("Sg:n:"))
+                .filter_map(|r| r.split(':').nth(1))
+                .collect();
+            let unique: HashSet<&str> = vars.iter().copied().collect();
+            assert_eq!(
+                vars.len(),
+                unique.len(),
+                "{name} reused Sg:n variable names in {smi}"
+            );
+        }
+        let cl_dha = generate_smiles("CL 22:6_22:6_22:6_22:6").unwrap_or_default();
+        assert!(
+            cl_dha.contains("constrain(v+w+x+y+z+aa+ab=14)"),
+            "expected multi-letter aa/ab variables past z: {cl_dha}"
+        );
+        assert_chain_map_sane("PC 22:6_22:6", &[(1, 22), (2, 22)]);
+        assert_chain_map_sane(
+            "CL 22:6_22:6_22:6_22:6",
+            &[(1, 22), (2, 22), (3, 22), (4, 22)],
+        );
     }
 }

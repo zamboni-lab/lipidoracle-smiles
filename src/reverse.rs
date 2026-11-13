@@ -279,9 +279,7 @@ fn consensus_tails(canonical: &str) -> Vec<Option<String>> {
 
     // A `chain1` label only ever appears on a lipid with one chain to name —
     // a complex lipid's chains are always `sn1`, `sn2`, ...
-    let single_chain = fields
-        .split(|c| c == ',' || c == ';' || c == '$')
-        .any(|token| token == "chain1");
+    let single_chain = fields.split([',', ';', '$']).any(|token| token == "chain1");
 
     let mut out = Vec::new();
     for assumed_sn in 1..=4 {
@@ -492,7 +490,7 @@ fn graph_sphingoid_chain(
                 let i = neighbor.0 as usize;
                 allowed.contains(&i)
                     && element(mol, i) == Element::O
-                    && mol.bond(bond).order == BondOrder::Single
+                    && single_bond(mol.bond(bond).order)
                     && mol.degree(neighbor) == 1
             })
     };
@@ -931,12 +929,46 @@ fn longest_carbon_path(
 }
 
 fn double_bond_geometry(mol: &Molecule, path: &[usize], bond_pos: usize) -> Option<char> {
-    if bond_pos == 0 || bond_pos + 2 >= path.len() {
-        return None;
-    }
-    let before = directed_marker(mol, path[bond_pos - 1], path[bond_pos])?;
-    let after = directed_marker(mol, path[bond_pos + 1], path[bond_pos + 2])?;
+    let prev = *path.get(bond_pos.checked_sub(1)?)?;
+    let left = *path.get(bond_pos)?;
+    let right = *path.get(bond_pos + 1)?;
+    let next = *path.get(bond_pos + 2)?;
+    let before = chain_end_marker(mol, prev, left, right, true)?;
+    let after = chain_end_marker(mol, next, right, left, false)?;
     Some(if before == after { 'E' } else { 'Z' })
+}
+
+fn chain_end_marker(
+    mol: &Molecule,
+    chain_neighbor: usize,
+    sp2_carbon: usize,
+    double_partner: usize,
+    into_sp2: bool,
+) -> Option<char> {
+    let direct = if into_sp2 {
+        directed_marker(mol, chain_neighbor, sp2_carbon)
+    } else {
+        directed_marker(mol, sp2_carbon, chain_neighbor)
+    };
+    if direct.is_some() {
+        return direct;
+    }
+    let sp2_idx = AtomIdx(u32::try_from(sp2_carbon).ok()?);
+    for (neighbor, _) in mol.neighbors(sp2_idx) {
+        let other = usize::try_from(neighbor.0).ok()?;
+        if other == double_partner || other == chain_neighbor {
+            continue;
+        }
+        let alt = if into_sp2 {
+            directed_marker(mol, other, sp2_carbon)
+        } else {
+            directed_marker(mol, sp2_carbon, other)
+        };
+        if let Some(dir) = alt {
+            return Some(if dir == '/' { '\\' } else { '/' });
+        }
+    }
+    None
 }
 
 fn directed_marker(mol: &Molecule, from: usize, to: usize) -> Option<char> {
@@ -1280,6 +1312,42 @@ mod tests {
             let once = round(name).unwrap_or_else(|| panic!("{name} should resolve"));
             let twice = round(&once).unwrap_or_else(|| panic!("{once} should resolve"));
             assert_eq!(once, twice, "{name} did not settle after one trip");
+        }
+    }
+
+    #[test]
+    fn conjugated_polyenes_partial_stereobonds_sphingoid_d3_and_many_sg_vars_round_trip() {
+        for name in [
+            // 1. Conjugated dienes (all 4 Z/E combinations) and conjugated triene
+            "FA 18:2(9Z,11Z)",
+            "FA 18:2(9Z,11E)",
+            "FA 18:2(9E,11Z)",
+            "FA 18:2(9E,11E)",
+            "FA 18:3(9Z,11E,13Z)",
+            // 2. Partially localized chains with Z/E stereobonds
+            "FA 18:2(9Z)",
+            "FA 18:2(9E)",
+            "PC 16:0/18:2(9Z)",
+            "PC 16:0/18:2(9E)",
+            // 3. Sphingoid delta-3 and delta-4 Z/E stereobonds
+            "Cer d18:1(3E)/16:0",
+            "Cer d18:1(3Z)/16:0",
+            "Cer d18:1(4E)/16:0",
+            "Cer d18:1(4Z)/16:0",
+            "Sph d18:1(3E)",
+            "Sph d18:1(3Z)",
+            "Cer t18:1(3E)/16:0",
+            // 4. >10 and >26 Sg:n polymer segments
+            "CL 18:2_18:2_18:2_18:2",
+            "PC 22:6_22:6",
+            "CL 22:6_22:6_22:6_22:6",
+            "FA 32:10",
+        ] {
+            assert_eq!(
+                round(name).as_deref(),
+                Some(name),
+                "{name} failed smiles2name round-trip"
+            );
         }
     }
 }
