@@ -30,6 +30,8 @@
 //!
 //! [CXSMILES]: https://docs.chemaxon.com/latest/formats_chemaxon-extended-smiles-and-smarts-cxsmiles-and-cxsmarts.html
 
+extern crate alloc;
+
 mod consensus;
 mod cxsmiles;
 mod depiction;

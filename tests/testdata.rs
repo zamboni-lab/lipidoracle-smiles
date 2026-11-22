@@ -585,7 +585,7 @@ fn write_testdata_corpus() {
         for row in read_csv(file) {
             let name = &row[0];
             let cxsmiles = name2smiles(name).unwrap_or_default();
-            let expanded = name2structure(name).map(|s| s.smiles).unwrap_or_default();
+            let expanded = name2structure(name).map_or_default(|s| s.smiles);
             if cxsmiles.is_empty() {
                 // Not fatal: a row may exist to pin that a name is rejected.
                 println!("  note: {name} produced no structure");

@@ -76,7 +76,8 @@
 //! glycosidic linkage positions, so there is no honest single structure to
 //! emit and they are not handled here.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use alloc::collections::BTreeMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Geometry {
@@ -1028,8 +1029,7 @@ fn offset_sg_block(
     let var_start = pos_end + 1;
     let var_end = block[var_start..]
         .find(':')
-        .map(|i| var_start + i)
-        .unwrap_or(block.len());
+        .map_or(block.len(), |i| var_start + i);
     let var_str = &block[var_start..var_end];
     let new_var = var_renaming.get(var_str).map_or(var_str, String::as_str);
     format!("Sg:n:{}:{new_var}:ht", pos + atom_offset)
@@ -1770,7 +1770,6 @@ fn chain_tokens(
             let open_up = if k > 1 {
                 match bonds.get(&(k - 1)).map(String::as_str) {
                     Some("\\") => false,
-                    Some("/") => true,
                     None => {
                         bonds.insert(k - 1, "/".to_string());
                         true
@@ -1808,10 +1807,10 @@ fn assemble_range(
     let mut out = String::new();
     let mut carbon_atoms = Vec::with_capacity((end.saturating_sub(start) + 1) as usize);
     let mut atom_idx = 0usize;
-    if start > 1 {
-        if let Some(b @ ("/" | "\\")) = bonds.get(&(start - 1)).map(String::as_str) {
-            out.push_str(b);
-        }
+    if let Some(prev) = start.checked_sub(1)
+        && let Some(b @ ("/" | "\\")) = bonds.get(&prev).map(String::as_str)
+    {
+        out.push_str(b);
     }
     for k in start..=end {
         let tok = &atoms[(k - 1) as usize];

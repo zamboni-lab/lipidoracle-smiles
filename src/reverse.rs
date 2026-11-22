@@ -407,8 +407,7 @@ fn sphingoid_graph_candidates(mol: &Molecule, cx: &Cx<'_>, main: &HashSet<usize>
                 });
                 let has_n_acyl = acyl_start.is_some();
                 let removed = acyl_start
-                    .map(|carbonyl| HashSet::from([normalized_edge(n, carbonyl)]))
-                    .unwrap_or_default();
+                    .map_or_default(|carbonyl| HashSet::from([normalized_edge(n, carbonyl)]));
                 let components = connected_components(mol, &removed);
                 let base_component = components.iter().find(|part| part.contains(&c1));
                 let Some(base_component) = base_component else {
