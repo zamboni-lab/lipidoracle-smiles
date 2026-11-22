@@ -15,3 +15,7 @@ exclude_re = [
 
 test_tool = "nextest"
 timeout_multiplier = 1.5
+# Skip gitignored directories when copying the tree; untracked non-ignored files are still copied.
+gitignore = true
+# Cap rustc lints inside mutant builds so denied lints do not mask real mutants as Unviable.
+cap_lints = true

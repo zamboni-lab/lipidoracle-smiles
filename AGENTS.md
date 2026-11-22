@@ -22,14 +22,21 @@ Always invoke checks and builds through `./mk` so local runs match pre-push hook
 
 ```bash
 ./mk setup                     # Install pinned toolchains and tools (once)
-./mk check                     # Fast inner loop (<10s): fmt, tombi, typos, clippy
+./mk check [-p <crate>]        # Fast inner loop (<10s): fmt, tombi, typos, clippy
+./mk check-changed             # Inner loop scoped to changed packages
 ./mk fix                       # Auto-fix formatting, TOML, typos, and clippy
-./mk test-fast                 # Unit + integration tests (nextest / cargo test, no doctests)
+./mk test-fast [-p <crate>]    # Unit + integration tests (nextest / cargo test, no doctests)
 ./mk test-fast -E 'test(name)' # Run one targeted test via nextest
+./mk test-changed              # Unit + integration tests scoped to affected packages
 ./mk test                      # Full test suite including doctests and README examples
 ./mk watch                     # Continuous feedback via bacon / cargo-watch
-./mk mutants-diff              # Mutation testing on branch diff against base
+./mk mutants-diff              # Mutation testing on branch diff against base (supports -f, --iterate)
+./mk mutants-affected [base]   # Mutation testing on affected packages
+./mk mutants-plan              # Single-line JSON shard plan (--mode diff|affected|full)
+./mk ci-fast                   # Local pre-push gate (omits mutants-diff & network audit)
+./mk ci-core                   # Blocking PR checks excluding mutants-diff
 ./mk ci                        # All blocking PR gates (must pass before finishing)
+./mk ci-nightly-checks         # Nightly non-mutation sweeps
 ./mk ci-nightly                # Nightly gates: mutants, coverage (cov), powerset (hack), miri, outdated
 ```
 
