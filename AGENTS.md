@@ -51,7 +51,7 @@ Set `NO_COLOR=1` or `CI=1` for machine-readable, uncolored output.
 
 ## Conventions & Hard Prohibitions
 
-- **Single entrypoint**: Always invoke `./mk <task>`. Never edit `mk`, `mk.versions`, or `.github/actions/setup/action.yml`; put repo-specific settings in `mk.local`.
+- **Single entrypoint**: Always invoke `./mk <task>`. Never edit `mk`, `mk.versions`, `.mk/*`, or `.github/actions/setup/action.yml`; put repo-specific settings in `mk.local`.
 - **Never weaken a gate**:
   - No `unsafe` (`unsafe_code = "forbid"`).
   - No `unwrap()`, `expect()`, `panic!()`, `todo!()`, or `dbg!()` outside tests (`unwrap_used` and `expect_used` are ratcheted and may only decrease).
